@@ -1,0 +1,7 @@
+[package]
+name = "solar_control"
+version = "0.1.0"
+authors = ["Eric Stokes <letaris@gmail.com>"]
+
+[dependencies]
+morningstar = {path = "../morningstar"}
