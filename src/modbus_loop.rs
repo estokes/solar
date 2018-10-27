@@ -29,11 +29,7 @@ pub(crate) fn start(cfg: &Config, to_main: Sender<ToMainLoop>) -> Result<Sender<
                 },
             Command::Coil(coil, bit) =>
                 match con.write_coil(coil, bit) {
-                    Ok(()) =>
-                        match to_main.send(ToMainLoop::CoilWasSet) {
-                            Ok(()) => (),
-                            Err(_) => break
-                        },
+                    Ok(()) => ()
                     Err(e) => {
                         let _ = to_main.send(ToMainLoop::FatalError(format!("failed to set coil {}", e)));
                         break

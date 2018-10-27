@@ -6,14 +6,17 @@ extern crate syslog;
 #[macro_use] extern crate error_chain;
 extern crate libmodbus_rs;
 
+mod modbus_loop;
+mod control_socket;
+
 use morningstar::prostar_mppt as ps;
 use libmodbus_rs::prelude as mb;
+use control_socket::ToClient;
 use std::{
     thread, sync::mpsc::{Sender, Receiver, channel}, io, fs,
-    time::Duration
+    time::{Duration, Instant}
 };
 
-mod modbus_loop;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Config {
@@ -25,12 +28,19 @@ pub(crate) struct Config {
     pub(crate) daemonize: bool
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) enum FromClient {
+    SetChargingEnabled(bool),
+    SetLoadEnabled(bool),
+    ResetController,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ToMainLoop {
     Stats(ps::Stats),
-    CoilWasSet,
     StatsLogged,
     FatalError(String),
+    FromClient(FromClient),
     Tick
 }
 
@@ -63,6 +73,47 @@ fn stats_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Result<Sender<ps::
     Ok(sender)
 }
 
+fn send<T>(s: Sender<T>, m: T) {
+    match s.send(m) {
+        Ok(()) => (),
+        Err(e) => {
+            error!("failed to write to sender: {}", e);
+            panic!("failed to write to sender: {}", e)
+        }
+    }
+}
+
+fn run_server(config: Config) {
+    let (to_main, receiver) = channel();
+    ticker(&config, to_main.clone());
+    let stats_sink = stats_writer(&config, to_main.clone()).expect("failed to open stats log");
+    let mb = modbus_loop::start(&config, to_main.clone()).expect("failed to connect to modbus");
+    control_socket::run_server(&config, to_main.clone()).expect("failed to open control socket");
+    let mut last_stats_written = Instant::now();
+    for msg in receiver.iter() {
+        match msg {
+            ToMainLoop::Stats(s) => send(stats_sink, s),
+            ToMainLoop::StatsLogged => last_stats_written = Instant::now(),
+            ToMainLoop::FromClient(msg) =>
+                match msg {
+                    FromClient::SetChargingEnabled(b) => send(mb, modbus_loop::Command::Coil(ps::Coil::ChargeDisconnect, !b)),
+                    FromClient::SetLoadEnabled(b) => send(mb, modbus_loop::Command::Coil(ps::Coil::LoadDisconnect, !b)),
+                    FromClient::ResetController => send(mb, modbus_loop::Command::Coil(ps::Coil::ResetControl, true))
+                },
+            ToMainLoop::Tick => {
+                if last_stats_written.elapsed() > Duration::from_millis(config.stats_interval * 4) {
+                    warn!("stats logging is delayed")
+                }
+                send(mb, modbus_loop::Command::Stats)
+            },
+            ToMainLoop::FatalError(s) => {
+                error!("exiting on fatal error: {}", s);
+                break
+            }
+        }
+    }
+}
+
 fn main() {
     let config : Config = {
         let path = match args().nth(1) {
@@ -72,4 +123,5 @@ fn main() {
         let f = File::open(path).expect("failed to open config file");
         serde_json::from_reader(f).expect("failed to parse config file")
     };
+    run_server(config)
 }
