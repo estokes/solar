@@ -10,27 +10,35 @@ pub(crate) enum Command {
     Coil(ps::Coil, bool)
 }
 
-fn send<T: 'static>(sender: Sender<T>, v: T) {
-    match sender.send(v) {
-        Ok(()) => (),
-        Err(e) => {
-            error!("failed to send response: {}", e);
-            panic!("failed to send response: {}", e)
-        }
-    }
-}
-
 pub(crate) fn start(cfg: &Config, to_main: Sender<ToMainLoop>) -> Result<Sender<Command>, mb::Error> {
     let con = ps::Con::connect(&cfg.device, 1)?;
     let (command_sender, command_receiver) = channel();
     thread::spawn(move || for command in command_receiver.iter() {
         match command {
-            Command::Stats => send(to_main, ToMainLoop::Stats(con.stats())),
-            Command::Coil(coil, bit) => send(to_main, ToMainLoop::SetCoil(con.write_coil(coil, bit))),
-            Command::Stop => {
-                info!("modbus loop shutting down as reqested");
-                break
-            }
+            Command::Stats =>
+                match con.stats() {
+                    Ok(s) =>
+                        match to_main.send(ToMainLoop::Stats(s)) {
+                            Ok(()) => (),
+                            Err(_) => break
+                        }
+                    Err(e) => {
+                        let _ = to_main.send(ToMainLoop::FatalError(format!("failed to fetch stats {}", e)));
+                        break
+                    }
+                },
+            Command::Coil(coil, bit) =>
+                match con.write_coil(coil, bit) {
+                    Ok(()) =>
+                        match to_main.send(ToMainLoop::CoilWasSet) {
+                            Ok(()) => (),
+                            Err(_) => break
+                        },
+                    Err(e) => {
+                        let _ = to_main.send(ToMainLoop::FatalError(format!("failed to set coil {}", e)));
+                        break
+                    }
+                }
         }
     });
     Ok(command_sender)
