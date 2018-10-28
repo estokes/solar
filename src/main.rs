@@ -1,3 +1,4 @@
+extern crate nix;
 extern crate daemonize;
 extern crate morningstar;
 extern crate serde;
@@ -11,6 +12,7 @@ extern crate libmodbus_rs;
 mod modbus_loop;
 mod control_socket;
 
+use nix::sys::signal::{Signal, SigSet};
 use daemonize::Daemonize;
 use structopt::StructOpt;
 use morningstar::prostar_mppt as ps;
@@ -44,7 +46,20 @@ pub(crate) enum ToMainLoop {
     StatsLogged,
     FatalError(String),
     FromClient(FromClient),
+    Hup,
     Tick
+}
+
+fn signal(to_main: Sender<ToMainLoop>) {
+    thread::spawn(move || {
+        let mut sigset = SigSet::empty();
+        sigset.add(Signal::SIGHUP);
+        sigset.thread_unblock().expect("signal thread failed to unblock signals");
+        loop {
+            let _ = sigset.wait().expect("error in sigwait");
+            to_main.send(ToMainLoop::Hup).expect("failed to send to main")
+        }
+    })
 }
 
 fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
@@ -87,11 +102,14 @@ fn send<T>(s: Sender<T>, m: T) {
 }
 
 fn run_server(config: Config) {
+    let mut sigmask = SigSet::empty();
+    sigmask.add(Signal::SIGHUP);
+    sigmask.thread_block().expect("pthread_sigmask failed");
     let (to_main, receiver) = channel();
     ticker(&config, to_main.clone());
-    let stats_sink = stats_writer(&config, to_main.clone()).expect("failed to open stats log");
+    let mut stats_sink = stats_writer(&config, to_main.clone()).expect("failed to open stats log");
     let mb = modbus_loop::start(&config, to_main.clone()).expect("failed to connect to modbus");
-    control_socket::run_server(&config, to_main).expect("failed to open control socket");
+    control_socket::run_server(&config, to_main.clone()).expect("failed to open control socket");
     
     let mut last_stats_written = Instant::now();
     for msg in receiver.iter() {
@@ -104,6 +122,7 @@ fn run_server(config: Config) {
                     FromClient::SetLoadEnabled(b) => send(mb, modbus_loop::Command::Coil(ps::Coil::LoadDisconnect, !b)),
                     FromClient::ResetController => send(mb, modbus_loop::Command::Coil(ps::Coil::ResetControl, true))
                 },
+            ToMainLoop::Hup => stats_sink = stats_writer(&config, to_main.clone()).expect("failed to open stats log"),
             ToMainLoop::Tick => {
                 if last_stats_written.elapsed() > Duration::from_millis(config.stats_interval * 4) {
                     warn!("stats logging is delayed")
