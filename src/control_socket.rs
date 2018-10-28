@@ -29,3 +29,8 @@ pub(crate) fn run_server(cfg: &Config, to_main: Sender<ToMainLoop>) -> Result<()
     });
     Ok(())
 }
+
+pub(crate) fn single_command(cfg: &Config, m: FromClient) -> Result<(), io::Error> {
+    let con = UnixStream::connect(&cfg.control_socket)?;
+    Ok(serde_json::to_writer(&m)?)
+}

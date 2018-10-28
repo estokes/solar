@@ -1,3 +1,4 @@
+extern crate daemonize;
 extern crate morningstar;
 extern crate serde;
 extern crate serde_json;
@@ -5,10 +6,13 @@ extern crate serde_json;
 extern crate syslog;
 #[macro_use] extern crate error_chain;
 extern crate libmodbus_rs;
+#[macro_use] extern crate structopt;
 
 mod modbus_loop;
 mod control_socket;
 
+use daemonize::Daemonize;
+use structopt::StructOpt;
 use morningstar::prostar_mppt as ps;
 use libmodbus_rs::prelude as mb;
 use control_socket::ToClient;
@@ -25,7 +29,6 @@ pub(crate) struct Config {
     pub(crate) stats_log: String,
     pub(crate) control_socket: String,
     pub(crate) stats_interval: u32,
-    pub(crate) daemonize: bool
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -88,7 +91,8 @@ fn run_server(config: Config) {
     ticker(&config, to_main.clone());
     let stats_sink = stats_writer(&config, to_main.clone()).expect("failed to open stats log");
     let mb = modbus_loop::start(&config, to_main.clone()).expect("failed to connect to modbus");
-    control_socket::run_server(&config, to_main.clone()).expect("failed to open control socket");
+    control_socket::run_server(&config, to_main).expect("failed to open control socket");
+    
     let mut last_stats_written = Instant::now();
     for msg in receiver.iter() {
         match msg {
@@ -114,14 +118,64 @@ fn run_server(config: Config) {
     }
 }
 
+#[derive(Debug, StructOpt)]
+enum SubCommand {
+    #[structopt(name = "start")]
+    Start {
+        #[structopt(short = "d", long = "daemonize")]
+        daemonize: bool
+    },
+    #[structopt(name = "stop")]
+    Stop,
+    #[structopt(name = "disable-load")]
+    DisableLoad,
+    #[structopt(name = "enable-load")]
+    EnableLoad,
+    #[structopt(name = "disable-charging")]
+    DisableCharging,
+    #[structopt(name = "enable-charging")]
+    EnableCharging
+}
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = "solar", about = "solar power management system")]
+enum Options {
+    #[structopt(short = "c", long = "config", default = "/etc/solar.conf")]
+    config: String,
+    #[structopt(subcommand)]
+    cmd: SubCommand
+}
+
 fn main() {
+    let opt = Options::from_args();
     let config : Config = {
-        let path = match args().nth(1) {
-            Some(p) => p,
-            None => "/etc/solar.conf".into()
-        };
-        let f = File::open(path).expect("failed to open config file");
+        let f = File::open(&opt.config).expect("failed to open config file");
         serde_json::from_reader(f).expect("failed to parse config file")
     };
-    run_server(config)
+    match opt.cmd {
+        SubCommand::Start {daemonize} => {
+            if daemonize {
+                let d = Daemonize::new().pid_file(&config.pid_file);
+                match d.start() {
+                    Ok(()) => run_server(config),
+                    Err(e) => panic!("failed to daemonize: {}", e)
+                }
+            } else {
+                run_server(config)
+            }
+        }
+        SubCommand::Stop => unimplemented!(),
+        SubCommand::DisableLoad =>
+            control_socket::single_command(&config, ToClient::SetLoadEnabled(false))
+            .expect("failed to disable load. Is the daemon running?"),
+        SubCommand::EnableLoad =>
+            control_socket::single_command(&config, ToClient::SetLoadEnabled(true))
+            .expect("failed to enable load. Is the daemon running?"),
+        SubCommand:DisableCharging =>
+            control_socket::single_command(&config, ToClient::SetChargingEnabled(false))
+            .expect("failed to disable charging. Is the daemon running?"),
+        SubCommand::EnableCharging =>
+            control_socket::single_command(&config, ToClient::SetChargingEnabled(true))
+            .expect("failed to enable charging. Is the daemon running?")
+    }
 }
