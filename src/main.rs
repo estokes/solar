@@ -1,3 +1,4 @@
+extern crate simple_logger;
 extern crate nix;
 extern crate daemonize;
 extern crate morningstar;
@@ -5,7 +6,6 @@ extern crate serde;
 extern crate serde_json;
 #[macro_use] extern crate log;
 extern crate syslog;
-#[macro_use] extern crate error_chain;
 extern crate libmodbus_rs;
 #[macro_use] extern crate structopt;
 
@@ -22,7 +22,6 @@ use std::{
     thread, sync::mpsc::{Sender, Receiver, channel}, io, fs,
     time::{Duration, Instant}
 };
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Config {
@@ -44,93 +43,121 @@ pub(crate) enum FromClient {
 pub(crate) enum ToMainLoop {
     Stats(ps::Stats),
     StatsLogged,
-    FatalError(String),
+    FatalError {thread: String, msg: String},
     FromClient(FromClient),
     Hup,
     Tick
 }
 
+pub(crate) fn current_thread() -> String {
+    thread::current().name()
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| "<anonymous>".to_owned())
+}
+
+macro_rules! or_fatal {
+    ($to_main:ident, $e:expr, $msg:expr) => {
+        match $e {
+            Ok(r) => r,
+            Err(e) => {
+                let thread = current_thread();
+                match $to_main.send(ToMain::FatalError {thread, msg: format!($msg, e)}) {
+                    Ok(()) => (),
+                    Err(f) => error!(
+                        "thread {} failed to send fatal error to main: {}",
+                        format!($msg, e)
+                    )
+                }
+                return
+            }
+        }
+    };
+    ($e:expr, $msg:expr) => {
+        match $e {
+            Ok(r) => r,
+            Err(e) => {
+                error!($msg, current_thread(), e);
+                return
+            }
+        }
+    }
+}
+
 fn signal(to_main: Sender<ToMainLoop>) {
-    thread::spawn(move || {
+    thread::Builder::new().name("signal").stack_size(256).spawn(move || {
         let mut sigset = SigSet::empty();
         sigset.add(Signal::SIGHUP);
-        sigset.thread_unblock().expect("signal thread failed to unblock signals");
+        or_fatal!(to_main, sigset.thread_unblock(), "failed to set sigmask {}");
         loop {
-            let _ = sigset.wait().expect("error in sigwait");
-            to_main.send(ToMainLoop::Hup).expect("failed to send to main")
+            or_fatal!(to_main, sigset.wait(), "error in sigwait {}");
+            or_fatal!(to_main.send(ToMainLoop::Hup), "thread {} failed to send to main {}")
         }
     })
 }
 
 fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
     let interval = Duration::from_millis(cfg.stats_interval);
-    thread::spawn(move || loop {
-        match to_main.send(ToMainLoop::Tick) {
-            Ok(()) => thread::sleep(interval),
-            Err(_) => break
-        }
+    thread::Builder::new().name("ticker").stack_size(256).spawn.(move || loop {
+        or_fatal!(to_main.send(ToMainLoop::Tick), "thread {} failed to send to main {}");
+        thread::sleep(interval);
     })
 }
 
-fn stats_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Result<Sender<ps::Stats>, io::Error> {
-    let log = fs::OpenOptions::new().write(true).append(true).create(true).open(&cfg.stats_log)?;
+fn stats_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> {
     let (sender, receiver) = channel();
-    thread::spawn(move || for st in receiver.iter() {        
-        match serde_json::to_writer_pretty(&log, &st) {
-            Ok(()) =>
-                match to_main.send(ToMainLoop::StatsLogged) {
-                    Ok(()) => (),
-                    Err(_) => break
-                },
-            Err(e) => {
-                let _ = to_main.send(ToMainLoop::FatalError(format!("failed to write stats {}", e)));
-                break
-            }
+    let path = cfg.stats_log.clone();
+    thread::Builder::new().name("stats").stack_size(4096).spawn(move || {
+        let log = or_fatal!(
+            to_main,
+            fs::OpenOptions::new().write(true).append(true).create(true).open(&path),
+            "failed to open stats log {}"
+        );
+        for st in receiver.iter() {
+            or_fatal!(to_main, serde_json::to_writer(&log, &st), "failed to write stats {}");
+            or_fatal!(to_main, write!(&log, "\n"), "failed to write record sep {}");
+            or_fatal!(to_main.send(ToMainLoop::StatsLogged), "thread {} failed to send to main {}");
         }
     });
-    Ok(sender)
-}
-
-fn send<T>(s: Sender<T>, m: T) {
-    match s.send(m) {
-        Ok(()) => (),
-        Err(e) => {
-            error!("failed to write to sender: {}", e);
-            panic!("failed to write to sender: {}", e)
-        }
-    }
+    sender
 }
 
 fn run_server(config: Config) {
     let mut sigmask = SigSet::empty();
     sigmask.add(Signal::SIGHUP);
-    sigmask.thread_block().expect("pthread_sigmask failed");
+    or_fatal!(sigmask.thread_block(), "{} pthread_sigmask failed {}");
     let (to_main, receiver) = channel();
+    signal(to_main.clone());
     ticker(&config, to_main.clone());
-    let mut stats_sink = stats_writer(&config, to_main.clone()).expect("failed to open stats log");
-    let mb = modbus_loop::start(&config, to_main.clone()).expect("failed to connect to modbus");
-    control_socket::run_server(&config, to_main.clone()).expect("failed to open control socket");
-    
+    let mut stats_sink = stats_writer(&config, to_main.clone());
+    let mb = modbus_loop::start(&config, to_main.clone());
+    control_socket::run_server(&config, to_main.clone());;
+
     let mut last_stats_written = Instant::now();
     for msg in receiver.iter() {
         match msg {
-            ToMainLoop::Stats(s) => send(stats_sink, s),
+            ToMainLoop::Stats(s) => or_fatal!(stats_sink.send(s), "{} failed to send stats"),
             ToMainLoop::StatsLogged => last_stats_written = Instant::now(),
-            ToMainLoop::FromClient(msg) =>
-                match msg {
-                    FromClient::SetChargingEnabled(b) => send(mb, modbus_loop::Command::Coil(ps::Coil::ChargeDisconnect, !b)),
-                    FromClient::SetLoadEnabled(b) => send(mb, modbus_loop::Command::Coil(ps::Coil::LoadDisconnect, !b)),
-                    FromClient::ResetController => send(mb, modbus_loop::Command::Coil(ps::Coil::ResetControl, true))
-                },
-            ToMainLoop::Hup => stats_sink = stats_writer(&config, to_main.clone()).expect("failed to open stats log"),
-            ToMainLoop::Tick => {
-                if last_stats_written.elapsed() > Duration::from_millis(config.stats_interval * 4) {
-                    warn!("stats logging is delayed")
-                }
-                send(mb, modbus_loop::Command::Stats)
+            ToMainLoop::FromClient(msg) => {
+                let m = match msg {
+                    FromClient::SetChargingEnabled(b) =>
+                        modbus_loop::Command::Coil(ps::Coil::ChargeDisconnect, !b),
+                    FromClient::SetLoadEnabled(b) =>
+                        modbus_loop::Command::Coil(ps::Coil::LoadDisconnect, !b),
+                    FromClient::ResetController =>
+                        modbus_loop::Command::Coil(ps::Coil::ResetControl, true)
+                };
+                or_fatal!(mb.send(m), "{} failed to send msg to modbus {}");
             },
-            ToMainLoop::FatalError(s) => {
-                error!("exiting on fatal error: {}", s);
+            ToMainLoop::Hup => stats_sink = stats_writer(&config, to_main.clone()),
+            ToMainLoop::Tick => {
+                let timeout = Duration::from_millis(config.stats_interval * 4);
+                let elapsed = last_stats_written.elapsed();
+                if elapsed > timeout { warn!("stats logging is delayed {}", elapsed) }
+                or_fatal!(mb.send(modbus_loop::Command::Stats),
+                          "{} failed to send to modbus {}")
+            },
+            ToMainLoop::FatalError {thread, msg} => {
+                error!("fatal error {} in thread {}, exiting", msg, thread);
                 break
             }
         }
@@ -174,12 +201,15 @@ fn main() {
     match opt.cmd {
         SubCommand::Start {daemonize} => {
             if daemonize {
+                syslog::init(syslog::Facility::LOG_DAEMON, syslog::LevelFilter::Trace, Some("solar"))
+                    .expect("failed to init syslog");
                 let d = Daemonize::new().pid_file(&config.pid_file);
                 match d.start() {
                     Ok(()) => run_server(config),
                     Err(e) => panic!("failed to daemonize: {}", e)
                 }
             } else {
+                simple_logger::init().expect("failed to init simple logger");
                 run_server(config)
             }
         }
