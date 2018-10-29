@@ -2,7 +2,7 @@ use morningstar::prostar_mppt as ps;
 use libmodbus_rs::prelude as mb;
 use std::{thread, fs::File, sync::mpsc::{Receiver, Sender, channel}};
 use Config;
-use ToMainloop;
+use ToMainLoop;
 
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Command {

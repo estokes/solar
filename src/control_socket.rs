@@ -23,18 +23,17 @@ fn handle_client(stream: UnixStream, to_main: Sender<ToMainLoop>) {
 
 pub(crate) fn run_server(cfg: &Config, to_main: Sender<ToMainLoop>) {
     let path = cfg.control_socket.clone();
-    thread::Builder::new().name("client_listener").stack_size(256)
-        .spawn(move || {
-            let listener = or_fatal!(
-                to_main, UnixListener::bind(&path),
-                "failed to create control socket {}"
-            );
-            for client in listener.incoming() {
-                let to_main = to_main.clone();
-                thread::Builder::new().name("client_handler").stack_size(1024)
-                    .spawn(move || handle_client(to_main, client));
-            }
-        })
+    thread::Builder::new().name("client_listener").stack_size(256).spawn(move || {
+        let listener = or_fatal!(
+            to_main, UnixListener::bind(&path),
+            "failed to create control socket {}"
+        );
+        for client in listener.incoming() {
+            let to_main = to_main.clone();
+            thread::Builder::new().name("client_handler").stack_size(1024)
+                .spawn(move || handle_client(to_main, client));
+        }
+    })
 }
 
 pub(crate) fn single_command(cfg: &Config, m: FromClient) -> Result<(), io::Error> {

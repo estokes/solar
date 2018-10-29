@@ -61,11 +61,11 @@ macro_rules! or_fatal {
             Ok(r) => r,
             Err(e) => {
                 let thread = current_thread();
-                match $to_main.send(ToMain::FatalError {thread, msg: format!($msg, e)}) {
+                match $to_main.send(ToMainLoop::FatalError {thread, msg: format!($msg, e)}) {
                     Ok(()) => (),
                     Err(f) => error!(
                         "thread {} failed to send fatal error to main: {}",
-                        format!($msg, e)
+                        thread, format!($msg, e)
                     )
                 }
                 return
@@ -97,7 +97,7 @@ fn signal(to_main: Sender<ToMainLoop>) {
 
 fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
     let interval = Duration::from_millis(cfg.stats_interval);
-    thread::Builder::new().name("ticker").stack_size(256).spawn.(move || loop {
+    thread::Builder::new().name("ticker").stack_size(256).spawn(move || loop {
         or_fatal!(to_main.send(ToMainLoop::Tick), "thread {} failed to send to main {}");
         thread::sleep(interval);
     })
@@ -135,7 +135,7 @@ fn run_server(config: Config) {
     let mut last_stats_written = Instant::now();
     for msg in receiver.iter() {
         match msg {
-            ToMainLoop::Stats(s) => or_fatal!(stats_sink.send(s), "{} failed to send stats"),
+            ToMainLoop::Stats(s) => or_fatal!(stats_sink.send(s), "{} failed to send stats {}"),
             ToMainLoop::StatsLogged => last_stats_written = Instant::now(),
             ToMainLoop::FromClient(msg) => {
                 let m = match msg {
@@ -185,7 +185,7 @@ enum SubCommand {
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "solar", about = "solar power management system")]
-enum Options {
+struct Options {
     #[structopt(short = "c", long = "config", default = "/etc/solar.conf")]
     config: String,
     #[structopt(subcommand)]
@@ -195,13 +195,13 @@ enum Options {
 fn main() {
     let opt = Options::from_args();
     let config : Config = {
-        let f = File::open(&opt.config).expect("failed to open config file");
+        let f = fs::File::open(&opt.config).expect("failed to open config file");
         serde_json::from_reader(f).expect("failed to parse config file")
     };
     match opt.cmd {
         SubCommand::Start {daemonize} => {
             if daemonize {
-                syslog::init(syslog::Facility::LOG_DAEMON, syslog::LevelFilter::Trace, Some("solar"))
+                syslog::init(syslog::Facility::LOG_DAEMON, log::LevelFilter::Trace, Some("solar"))
                     .expect("failed to init syslog");
                 let d = Daemonize::new().pid_file(&config.pid_file);
                 match d.start() {
@@ -220,7 +220,7 @@ fn main() {
         SubCommand::EnableLoad =>
             control_socket::single_command(&config, ToClient::SetLoadEnabled(true))
             .expect("failed to enable load. Is the daemon running?"),
-        SubCommand:DisableCharging =>
+        SubCommand::DisableCharging =>
             control_socket::single_command(&config, ToClient::SetChargingEnabled(false))
             .expect("failed to disable charging. Is the daemon running?"),
         SubCommand::EnableCharging =>
