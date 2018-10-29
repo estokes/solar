@@ -4,56 +4,11 @@ extern crate daemonize;
 extern crate morningstar;
 extern crate serde;
 extern crate serde_json;
+#[macro_use] extern crate serde_derive;
 #[macro_use] extern crate log;
 extern crate syslog;
 extern crate libmodbus_rs;
 #[macro_use] extern crate structopt;
-
-mod modbus_loop;
-mod control_socket;
-
-use nix::sys::signal::{Signal, SigSet};
-use daemonize::Daemonize;
-use structopt::StructOpt;
-use morningstar::prostar_mppt as ps;
-use libmodbus_rs::prelude as mb;
-use control_socket::ToClient;
-use std::{
-    thread, sync::mpsc::{Sender, Receiver, channel}, io, fs,
-    time::{Duration, Instant}
-};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct Config {
-    pub(crate) device: String,
-    pub(crate) pid_file: String,
-    pub(crate) stats_log: String,
-    pub(crate) control_socket: String,
-    pub(crate) stats_interval: u32,
-}
-
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub(crate) enum FromClient {
-    SetChargingEnabled(bool),
-    SetLoadEnabled(bool),
-    ResetController,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum ToMainLoop {
-    Stats(ps::Stats),
-    StatsLogged,
-    FatalError {thread: String, msg: String},
-    FromClient(FromClient),
-    Hup,
-    Tick
-}
-
-pub(crate) fn current_thread() -> String {
-    thread::current().name()
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| "<anonymous>".to_owned())
-}
 
 macro_rules! or_fatal {
     ($to_main:ident, $e:expr, $msg:expr) => {
@@ -63,9 +18,9 @@ macro_rules! or_fatal {
                 let thread = current_thread();
                 match $to_main.send(ToMainLoop::FatalError {thread, msg: format!($msg, e)}) {
                     Ok(()) => (),
-                    Err(f) => error!(
+                    Err(_) => error!(
                         "thread {} failed to send fatal error to main: {}",
-                        thread, format!($msg, e)
+                        current_thread(), format!($msg, e)
                     )
                 }
                 return
@@ -83,8 +38,52 @@ macro_rules! or_fatal {
     }
 }
 
+mod modbus_loop;
+mod control_socket;
+
+use nix::sys::signal::{Signal, SigSet};
+use daemonize::Daemonize;
+use structopt::StructOpt;
+use morningstar::prostar_mppt as ps;
+use std::{
+    thread, sync::mpsc::{Sender, channel},
+    io::Write, fs, time::{Duration, Instant}
+};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct Config {
+    pub(crate) device: String,
+    pub(crate) pid_file: String,
+    pub(crate) stats_log: String,
+    pub(crate) control_socket: String,
+    pub(crate) stats_interval: u64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) enum FromClient {
+    SetChargingEnabled(bool),
+    SetLoadEnabled(bool),
+    ResetController,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum ToMainLoop {
+    Stats(ps::Stats),
+    StatsLogged,
+    FatalError {thread: String, msg: String},
+    FromClient(FromClient),
+    Hup,
+    Tick
+}
+
+pub(crate) fn current_thread() -> String {
+    thread::current().name()
+        .map(|s| s.to_owned())
+        .unwrap_or_else(|| "<anonymous>".to_owned())
+}
+
 fn signal(to_main: Sender<ToMainLoop>) {
-    thread::Builder::new().name("signal").stack_size(256).spawn(move || {
+    thread::Builder::new().name("signal".into()).stack_size(256).spawn(move || {
         let mut sigset = SigSet::empty();
         sigset.add(Signal::SIGHUP);
         or_fatal!(to_main, sigset.thread_unblock(), "failed to set sigmask {}");
@@ -92,21 +91,21 @@ fn signal(to_main: Sender<ToMainLoop>) {
             or_fatal!(to_main, sigset.wait(), "error in sigwait {}");
             or_fatal!(to_main.send(ToMainLoop::Hup), "thread {} failed to send to main {}")
         }
-    })
+    }).unwrap();
 }
 
 fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
     let interval = Duration::from_millis(cfg.stats_interval);
-    thread::Builder::new().name("ticker").stack_size(256).spawn(move || loop {
+    thread::Builder::new().name("ticker".into()).stack_size(256).spawn(move || loop {
         or_fatal!(to_main.send(ToMainLoop::Tick), "thread {} failed to send to main {}");
         thread::sleep(interval);
-    })
+    }).unwrap();
 }
 
 fn stats_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> {
     let (sender, receiver) = channel();
     let path = cfg.stats_log.clone();
-    thread::Builder::new().name("stats").stack_size(4096).spawn(move || {
+    thread::Builder::new().name("stats".into()).stack_size(4096).spawn(move || {
         let log = or_fatal!(
             to_main,
             fs::OpenOptions::new().write(true).append(true).create(true).open(&path),
@@ -117,7 +116,7 @@ fn stats_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> 
             or_fatal!(to_main, write!(&log, "\n"), "failed to write record sep {}");
             or_fatal!(to_main.send(ToMainLoop::StatsLogged), "thread {} failed to send to main {}");
         }
-    });
+    }).unwrap();
     sender
 }
 
@@ -152,7 +151,7 @@ fn run_server(config: Config) {
             ToMainLoop::Tick => {
                 let timeout = Duration::from_millis(config.stats_interval * 4);
                 let elapsed = last_stats_written.elapsed();
-                if elapsed > timeout { warn!("stats logging is delayed {}", elapsed) }
+                if elapsed > timeout { warn!("stats logging is delayed {:?}", elapsed) }
                 or_fatal!(mb.send(modbus_loop::Command::Stats),
                           "{} failed to send to modbus {}")
             },
@@ -186,7 +185,7 @@ enum SubCommand {
 #[derive(Debug, StructOpt)]
 #[structopt(name = "solar", about = "solar power management system")]
 struct Options {
-    #[structopt(short = "c", long = "config", default = "/etc/solar.conf")]
+    #[structopt(short = "c", long = "config", default_value = "/etc/solar.conf")]
     config: String,
     #[structopt(subcommand)]
     cmd: SubCommand
@@ -215,16 +214,16 @@ fn main() {
         }
         SubCommand::Stop => unimplemented!(),
         SubCommand::DisableLoad =>
-            control_socket::single_command(&config, ToClient::SetLoadEnabled(false))
+            control_socket::single_command(&config, FromClient::SetLoadEnabled(false))
             .expect("failed to disable load. Is the daemon running?"),
         SubCommand::EnableLoad =>
-            control_socket::single_command(&config, ToClient::SetLoadEnabled(true))
+            control_socket::single_command(&config, FromClient::SetLoadEnabled(true))
             .expect("failed to enable load. Is the daemon running?"),
         SubCommand::DisableCharging =>
-            control_socket::single_command(&config, ToClient::SetChargingEnabled(false))
+            control_socket::single_command(&config, FromClient::SetChargingEnabled(false))
             .expect("failed to disable charging. Is the daemon running?"),
         SubCommand::EnableCharging =>
-            control_socket::single_command(&config, ToClient::SetChargingEnabled(true))
+            control_socket::single_command(&config, FromClient::SetChargingEnabled(true))
             .expect("failed to enable charging. Is the daemon running?")
     }
 }
