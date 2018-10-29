@@ -1,5 +1,4 @@
 extern crate simple_logger;
-extern crate nix;
 extern crate daemonize;
 extern crate morningstar;
 extern crate serde;
@@ -41,7 +40,6 @@ macro_rules! or_fatal {
 mod modbus_loop;
 mod control_socket;
 
-use nix::sys::signal::{Signal, SigSet};
 use daemonize::Daemonize;
 use structopt::StructOpt;
 use morningstar::prostar_mppt as ps;
@@ -64,6 +62,8 @@ pub(crate) enum FromClient {
     SetChargingEnabled(bool),
     SetLoadEnabled(bool),
     ResetController,
+    LogRotated,
+    Stop
 }
 
 #[derive(Debug, Clone)]
@@ -72,7 +72,6 @@ pub(crate) enum ToMainLoop {
     StatsLogged,
     FatalError {thread: String, msg: String},
     FromClient(FromClient),
-    Hup,
     Tick
 }
 
@@ -80,18 +79,6 @@ pub(crate) fn current_thread() -> String {
     thread::current().name()
         .map(|s| s.to_owned())
         .unwrap_or_else(|| "<anonymous>".to_owned())
-}
-
-fn signal(to_main: Sender<ToMainLoop>) {
-    thread::Builder::new().name("signal".into()).stack_size(256).spawn(move || {
-        let mut sigset = SigSet::empty();
-        sigset.add(Signal::SIGHUP);
-        or_fatal!(to_main, sigset.thread_unblock(), "failed to set sigmask {}");
-        loop {
-            or_fatal!(to_main, sigset.wait(), "error in sigwait {}");
-            or_fatal!(to_main.send(ToMainLoop::Hup), "thread {} failed to send to main {}")
-        }
-    }).unwrap();
 }
 
 fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
@@ -121,11 +108,7 @@ fn stats_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> 
 }
 
 fn run_server(config: Config) {
-    let mut sigmask = SigSet::empty();
-    sigmask.add(Signal::SIGHUP);
-    or_fatal!(sigmask.thread_block(), "{} pthread_sigmask failed {}");
     let (to_main, receiver) = channel();
-    signal(to_main.clone());
     ticker(&config, to_main.clone());
     let mut stats_sink = stats_writer(&config, to_main.clone());
     let mb = modbus_loop::start(&config, to_main.clone());
@@ -136,18 +119,19 @@ fn run_server(config: Config) {
         match msg {
             ToMainLoop::Stats(s) => or_fatal!(stats_sink.send(s), "{} failed to send stats {}"),
             ToMainLoop::StatsLogged => last_stats_written = Instant::now(),
-            ToMainLoop::FromClient(msg) => {
-                let m = match msg {
-                    FromClient::SetChargingEnabled(b) =>
-                        modbus_loop::Command::Coil(ps::Coil::ChargeDisconnect, !b),
-                    FromClient::SetLoadEnabled(b) =>
-                        modbus_loop::Command::Coil(ps::Coil::LoadDisconnect, !b),
-                    FromClient::ResetController =>
-                        modbus_loop::Command::Coil(ps::Coil::ResetControl, true)
-                };
-                or_fatal!(mb.send(m), "{} failed to send msg to modbus {}");
+            ToMainLoop::FromClient(msg) => match msg {
+                FromClient::SetChargingEnabled(b) => or_fatal!(
+                    mb.send(modbus_loop::Command::Coil(ps::Coil::ChargeDisconnect, !b)),
+                    "{} failed to send modbus command {}"),
+                FromClient::SetLoadEnabled(b) => or_fatal!(
+                    mb.send(modbus_loop::Command::Coil(ps::Coil::LoadDisconnect, !b)),
+                    "{} failed to send modbus command {}"),
+                FromClient::ResetController => or_fatal!(
+                    mb.send(modbus_loop::Command::Coil(ps::Coil::ResetControl, true)),
+                    "{} failed to send modbus command {}"),
+                FromClient::LogRotated => stats_sink = stats_writer(&config, to_main.clone()),
+                FromClient::Stop => break,
             },
-            ToMainLoop::Hup => stats_sink = stats_writer(&config, to_main.clone()),
             ToMainLoop::Tick => {
                 let timeout = Duration::from_millis(config.stats_interval * 4);
                 let elapsed = last_stats_written.elapsed();
@@ -179,7 +163,9 @@ enum SubCommand {
     #[structopt(name = "disable-charging")]
     DisableCharging,
     #[structopt(name = "enable-charging")]
-    EnableCharging
+    EnableCharging,
+    #[structopt(name = "log-rotated")]
+    LogRotated,
 }
 
 #[derive(Debug, StructOpt)]
@@ -212,7 +198,9 @@ fn main() {
                 run_server(config)
             }
         }
-        SubCommand::Stop => unimplemented!(),
+        SubCommand::Stop =>
+            control_socket::single_command(&config, FromClient::Stop)
+            .expect("failed to stop the daemon"),
         SubCommand::DisableLoad =>
             control_socket::single_command(&config, FromClient::SetLoadEnabled(false))
             .expect("failed to disable load. Is the daemon running?"),
@@ -224,6 +212,9 @@ fn main() {
             .expect("failed to disable charging. Is the daemon running?"),
         SubCommand::EnableCharging =>
             control_socket::single_command(&config, FromClient::SetChargingEnabled(true))
-            .expect("failed to enable charging. Is the daemon running?")
+            .expect("failed to enable charging. Is the daemon running?"),
+        SubCommand::LogRotated =>
+            control_socket::single_command(&config, FromClient::LogRotated)
+            .expect("failed to reopen log file")
     }
 }

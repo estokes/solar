@@ -1,5 +1,5 @@
 [package]
-name = "solar_control"
+name = "solar"
 version = "0.1.0"
 authors = ["Eric Stokes <letaris@gmail.com>"]
 
@@ -14,4 +14,3 @@ log = "0.4"
 syslog = "4.0"
 simple_logger = "1.0"
 daemonize = "0.3"
-nix = "0.11"

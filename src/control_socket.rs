@@ -1,6 +1,6 @@
 use std::{
-    thread, sync::mpsc::Sender,
-    io, os::unix::net::{UnixStream, UnixListener}
+    thread, sync::mpsc::Sender, io::{self, Write}, fs,
+    os::unix::net::{UnixStream, UnixListener}
 };
 use serde_json;
 use Config;
@@ -22,6 +22,7 @@ fn client_loop(stream: UnixStream, to_main: Sender<ToMainLoop>) {
 }
 
 fn accept_loop(path: String, to_main: Sender<ToMainLoop>) {
+    let _ = fs::remove_file(&path);
     let listener = or_fatal!(
         to_main, UnixListener::bind(&path),
         "failed to create control socket {}"
@@ -42,6 +43,7 @@ pub(crate) fn run_server(cfg: &Config, to_main: Sender<ToMainLoop>) {
 }
 
 pub(crate) fn single_command(cfg: &Config, m: FromClient) -> Result<(), io::Error> {
-    let con = UnixStream::connect(&cfg.control_socket)?;
-    Ok(serde_json::to_writer(&con, &m)?)
+    let mut con = UnixStream::connect(&cfg.control_socket)?;
+    serde_json::to_writer(&con, &m)?;
+    Ok(con.flush()?)
 }

@@ -1,5 +1,5 @@
 use morningstar::prostar_mppt as ps;
-use std::{thread, sync::mpsc::{Receiver, Sender, channel}};
+use std::{thread, sync::mpsc::{Receiver, Sender, channel}, time::{Instant, Duration}};
 use Config;
 use ToMainLoop;
 use current_thread;
@@ -15,11 +15,16 @@ fn modbus_loop(
     to_main: Sender<ToMainLoop>,
     command_receiver: Receiver<Command>
 ) {
+    let mut last_command = Instant::now();
     let con = or_fatal!(
         to_main, ps::Con::connect(&device, 1),
         "failed to connect to modbus {}"
     );
     for command in command_receiver.iter() {
+        while last_command.elapsed() < Duration::from_millis(500) {
+            thread::sleep(Duration::from_millis(50))
+        }
+        last_command = Instant::now();
         match command {
             Command::Coil(coil, bit) =>
                 or_fatal!(to_main, con.write_coil(coil, bit), "failed to set coil {}"),
