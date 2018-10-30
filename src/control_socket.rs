@@ -1,6 +1,7 @@
 use std::{
     thread, sync::mpsc::Sender, io::{self, Write}, fs,
-    os::unix::net::{UnixStream, UnixListener}
+    os::unix::net::{UnixStream, UnixListener},
+    borrow::Borrow
 };
 use serde_json;
 use Config;
@@ -42,8 +43,8 @@ pub(crate) fn run_server(cfg: &Config, to_main: Sender<ToMainLoop>) {
         .spawn(move || accept_loop(path, to_main_)).unwrap();
 }
 
-pub(crate) fn single_command(cfg: &Config, m: FromClient) -> Result<(), io::Error> {
+pub(crate) fn send(cfg: &Config, cmds: impl IntoIterator<Item = impl Borrow<FromClient>>) -> Result<(), io::Error> {
     let mut con = UnixStream::connect(&cfg.control_socket)?;
-    serde_json::to_writer(&con, &m)?;
+    for cmd in cmds { serde_json::to_writer(&con, cmd.borrow())?; }
     Ok(con.flush()?)
 }

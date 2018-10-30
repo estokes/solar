@@ -164,6 +164,8 @@ enum SubCommand {
     DisableCharging,
     #[structopt(name = "enable-charging")]
     EnableCharging,
+    #[structopt(name = "cancel-float")]
+    CancelFloat,
     #[structopt(name = "log-rotated")]
     LogRotated,
 }
@@ -183,6 +185,7 @@ fn main() {
         let f = fs::File::open(&opt.config).expect("failed to open config file");
         serde_json::from_reader(f).expect("failed to parse config file")
     };
+    use std::iter::once;
     match opt.cmd {
         SubCommand::Start {daemonize} => {
             if daemonize {
@@ -199,22 +202,27 @@ fn main() {
             }
         }
         SubCommand::Stop =>
-            control_socket::single_command(&config, FromClient::Stop)
+            control_socket::send(&config, once(FromClient::Stop))
             .expect("failed to stop the daemon"),
         SubCommand::DisableLoad =>
-            control_socket::single_command(&config, FromClient::SetLoadEnabled(false))
+            control_socket::send(&config, once(FromClient::SetLoadEnabled(false)))
             .expect("failed to disable load. Is the daemon running?"),
         SubCommand::EnableLoad =>
-            control_socket::single_command(&config, FromClient::SetLoadEnabled(true))
+            control_socket::send(&config, once(FromClient::SetLoadEnabled(true)))
             .expect("failed to enable load. Is the daemon running?"),
         SubCommand::DisableCharging =>
-            control_socket::single_command(&config, FromClient::SetChargingEnabled(false))
+            control_socket::send(&config, once(FromClient::SetChargingEnabled(false)))
             .expect("failed to disable charging. Is the daemon running?"),
         SubCommand::EnableCharging =>
-            control_socket::single_command(&config, FromClient::SetChargingEnabled(true))
+            control_socket::send(&config, once(FromClient::SetChargingEnabled(true)))
             .expect("failed to enable charging. Is the daemon running?"),
+        SubCommand::CancelFloat =>
+            control_socket::send(&config, &[
+                FromClient::SetChargingEnabled(false),
+                FromClient::SetChargingEnabled(true)
+            ]).expect("failed to cancel float"),
         SubCommand::LogRotated =>
-            control_socket::single_command(&config, FromClient::LogRotated)
+            control_socket::send(&config, once(FromClient::LogRotated))
             .expect("failed to reopen log file")
     }
 }
