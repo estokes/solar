@@ -17,7 +17,7 @@ fn modbus_loop(
 ) {
     let mut last_command = Instant::now();
     let con = or_fatal!(
-        to_main, ps::Con::connect(&device, 1),
+        to_main, ps::Connection::new(&device, 1),
         "failed to connect to modbus {}"
     );
     for command in command_receiver.iter() {

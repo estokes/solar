@@ -63,7 +63,13 @@ pub(crate) enum FromClient {
     SetLoadEnabled(bool),
     ResetController,
     LogRotated,
-    Stop
+    Stop,
+    TailStats
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub(crate) enum ToClient {
+    Stats(ps::Stats),
 }
 
 #[derive(Debug, Clone)]
@@ -71,7 +77,7 @@ pub(crate) enum ToMainLoop {
     Stats(ps::Stats),
     StatsLogged,
     FatalError {thread: String, msg: String},
-    FromClient(FromClient),
+    FromClient(FromClient, Sender<ToClient>),
     Tick
 }
 
@@ -89,7 +95,7 @@ fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
     }).unwrap();
 }
 
-fn stats_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> {
+fn log_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> {
     let (sender, receiver) = channel();
     let path = cfg.stats_log.clone();
     thread::Builder::new().name("stats".into()).stack_size(4096).spawn(move || {
@@ -110,16 +116,26 @@ fn stats_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> 
 fn run_server(config: Config) {
     let (to_main, receiver) = channel();
     ticker(&config, to_main.clone());
-    let mut stats_sink = stats_writer(&config, to_main.clone());
+    let mut log_sink = log_writer(&config, to_main.clone());
     let mb = modbus_loop::start(&config, to_main.clone());
     control_socket::run_server(&config, to_main.clone());;
 
     let mut last_stats_written = Instant::now();
+    let mut tailing : Vec<Sender<ToClient>> = Vec::new();
     for msg in receiver.iter() {
         match msg {
-            ToMainLoop::Stats(s) => or_fatal!(stats_sink.send(s), "{} failed to send stats {}"),
+            ToMainLoop::Stats(s) => {
+                or_fatal!(log_sink.send(s), "{} failed to send stats {}");
+                let mut i = 0;
+                while i < tailing.len() {
+                    match tailing[i].send(ToClient::Stats(s)) {
+                        Ok(()) => i += 1,
+                        Err(_) => tailing.remove(i)
+                    }
+                }
+            },
             ToMainLoop::StatsLogged => last_stats_written = Instant::now(),
-            ToMainLoop::FromClient(msg) => match msg {
+            ToMainLoop::FromClient(msg, reply) => match msg {
                 FromClient::SetChargingEnabled(b) => or_fatal!(
                     mb.send(modbus_loop::Command::Coil(ps::Coil::ChargeDisconnect, !b)),
                     "{} failed to send modbus command {}"),
@@ -130,6 +146,7 @@ fn run_server(config: Config) {
                     mb.send(modbus_loop::Command::Coil(ps::Coil::ResetControl, true)),
                     "{} failed to send modbus command {}"),
                 FromClient::LogRotated => stats_sink = stats_writer(&config, to_main.clone()),
+                FromClient::TailStats(sender) => tailing.push(reply),
                 FromClient::Stop => break,
             },
             ToMainLoop::Tick => {
@@ -168,6 +185,8 @@ enum SubCommand {
     CancelFloat,
     #[structopt(name = "log-rotated")]
     LogRotated,
+    #[structopt(name = "tail-stats")]
+    TailStats,
 }
 
 #[derive(Debug, StructOpt)]
@@ -202,27 +221,35 @@ fn main() {
             }
         }
         SubCommand::Stop =>
-            control_socket::send(&config, once(FromClient::Stop))
+            control_socket::send_command(&config, once(FromClient::Stop))
             .expect("failed to stop the daemon"),
         SubCommand::DisableLoad =>
-            control_socket::send(&config, once(FromClient::SetLoadEnabled(false)))
+            control_socket::send_command(&config, once(FromClient::SetLoadEnabled(false)))
             .expect("failed to disable load. Is the daemon running?"),
         SubCommand::EnableLoad =>
-            control_socket::send(&config, once(FromClient::SetLoadEnabled(true)))
+            control_socket::send_command(&config, once(FromClient::SetLoadEnabled(true)))
             .expect("failed to enable load. Is the daemon running?"),
         SubCommand::DisableCharging =>
-            control_socket::send(&config, once(FromClient::SetChargingEnabled(false)))
+            control_socket::send_command(&config, once(FromClient::SetChargingEnabled(false)))
             .expect("failed to disable charging. Is the daemon running?"),
         SubCommand::EnableCharging =>
-            control_socket::send(&config, once(FromClient::SetChargingEnabled(true)))
+            control_socket::send_command(&config, once(FromClient::SetChargingEnabled(true)))
             .expect("failed to enable charging. Is the daemon running?"),
         SubCommand::CancelFloat =>
-            control_socket::send(&config, &[
+            control_socket::send_command(&config, &[
                 FromClient::SetChargingEnabled(false),
                 FromClient::SetChargingEnabled(true)
             ]).expect("failed to cancel float"),
         SubCommand::LogRotated =>
-            control_socket::send(&config, once(FromClient::LogRotated))
-            .expect("failed to reopen log file")
+            control_socket::send_command(&config, once(FromClient::LogRotated))
+            .expect("failed to reopen log file"),
+        SubCommand::TailStats => {
+            let (send, recv) = channel();
+            control_socket::send_query(&config, send, FromClient::TailStats)
+                .expect("failed to tail stats");
+            for ToClient::Stats(s) in recv.iter() {
+                println!("{:#?}", s);
+            }
+        }
     }
 }

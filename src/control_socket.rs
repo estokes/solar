@@ -1,5 +1,5 @@
 use std::{
-    thread, sync::mpsc::Sender, io::{self, Write}, fs,
+    thread, sync::mpsc::{Sender, channel}, io::{self, Write}, fs,
     os::unix::net::{UnixStream, UnixListener},
     borrow::Borrow
 };
@@ -7,18 +7,23 @@ use serde_json;
 use Config;
 use ToMainLoop;
 use FromClient;
+use ToClient;
 use current_thread;
 
 fn client_loop(stream: UnixStream, to_main: Sender<ToMainLoop>) {
     loop {
         let m: FromClient = match serde_json::from_reader(&stream) {
             Ok(m) => m,
-            Err(e) => {
-                error!("malformed message from client: {}", e);
-                break
-            }
+            Err(_) => break
         };
-        or_fatal!(to_main.send(ToMainLoop::FromClient(m)), "{} failed to send {}");
+        let (send_reply, recv_reply) = channel();
+        or_fatal!(to_main.send(ToMainLoop::FromClient(m, send_reply)), "{} failed to send {}");
+        for ToClient::Stats(s) in recv_reply.iter() {
+            match serde_json::to_writer(&stream, &s) {
+                Ok(()) => (),
+                Err(_) => break
+            }
+        }
     }
 }
 
@@ -43,8 +48,22 @@ pub(crate) fn run_server(cfg: &Config, to_main: Sender<ToMainLoop>) {
         .spawn(move || accept_loop(path, to_main_)).unwrap();
 }
 
-pub(crate) fn send(cfg: &Config, cmds: impl IntoIterator<Item = impl Borrow<FromClient>>) -> Result<(), io::Error> {
+pub(crate) fn send_command(cfg: &Config, cmds: impl IntoIterator<Item = impl Borrow<FromClient>>) -> Result<(), io::Error> {
     let mut con = UnixStream::connect(&cfg.control_socket)?;
     for cmd in cmds { serde_json::to_writer(&con, cmd.borrow())?; }
     Ok(con.flush()?)
+}
+
+pub(crate) fn send_query(cfg: &Config, r: Sender<ToClient>, q: FromClient) -> Result<()> {
+    let socket_path = cfg.control_socket.clone();
+    thread::Builder::new().name("query_thread".into()).stack_size(256).spawn(move || {
+        let mut con = UnixStream::connect(&socket_path).unwrap();
+        serde_json::to_writer(&con, &q).unwrap();
+        loop {
+            match serde_json::from_reader(&con) {
+                Ok(m) => r.send(m).unwrap(),
+                Err(_) => break
+            }
+        }
+    })
 }
