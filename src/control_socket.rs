@@ -1,7 +1,7 @@
 use std::{
-    thread, sync::mpsc::{Sender, channel}, io::{self, Write}, fs,
+    thread, sync::mpsc::{Sender, channel}, fs,
     os::unix::net::{UnixStream, UnixListener},
-    borrow::Borrow
+    borrow::Borrow, io::{self, LineWriter, BufReader, BufRead, Write}
 };
 use serde_json;
 use Config;
@@ -11,17 +11,26 @@ use ToClient;
 use current_thread;
 
 fn client_loop(stream: UnixStream, to_main: Sender<ToMainLoop>) {
+    trace!("client loop started");
+    let mut reader = BufReader::new(stream.try_clone().unwrap());
+    let mut writer = LineWriter::new(stream);
+    let mut line = String::new();
     loop {
-        let m: FromClient = match serde_json::from_reader(&stream) {
+        trace!("client loop waiting for a message");
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        let m: FromClient = match serde_json::from_str(&line) {
             Ok(m) => m,
             Err(_) => break
         };
+        trace!("client loop message from client: {:?}", m);
         let (send_reply, recv_reply) = channel();
         or_fatal!(to_main.send(ToMainLoop::FromClient(m, send_reply)), "{} failed to send {}");
-        for ToClient::Stats(s) in recv_reply.iter() {
-            match serde_json::to_writer(&stream, &s) {
-                Ok(()) => (),
-                Err(_) => break
+        for s in recv_reply.iter() {
+            trace!("client loop reply to client: {:?}", serde_json::to_string(&s).unwrap());
+            match serde_json::to_writer(writer.by_ref(), &s) {
+                Err(_) => break,
+                Ok(()) => write!(writer.by_ref(), "\n").unwrap()
             }
         }
     }
@@ -49,21 +58,31 @@ pub(crate) fn run_server(cfg: &Config, to_main: Sender<ToMainLoop>) {
 }
 
 pub(crate) fn send_command(cfg: &Config, cmds: impl IntoIterator<Item = impl Borrow<FromClient>>) -> Result<(), io::Error> {
-    let mut con = UnixStream::connect(&cfg.control_socket)?;
-    for cmd in cmds { serde_json::to_writer(&con, cmd.borrow())?; }
-    Ok(con.flush()?)
+    let con = UnixStream::connect(&cfg.control_socket)?;
+    let mut con = LineWriter::new(con);
+    for cmd in cmds {
+        serde_json::to_writer(con.by_ref(), cmd.borrow())?;
+        write!(con.by_ref(), "\n");
+    }
+    Ok(())
 }
 
-pub(crate) fn send_query(cfg: &Config, r: Sender<ToClient>, q: FromClient) -> Result<()> {
+pub(crate) fn send_query(cfg: &Config, r: Sender<ToClient>, q: FromClient) {
     let socket_path = cfg.control_socket.clone();
     thread::Builder::new().name("query_thread".into()).stack_size(256).spawn(move || {
-        let mut con = UnixStream::connect(&socket_path).unwrap();
-        serde_json::to_writer(&con, &q).unwrap();
+        let con = UnixStream::connect(&socket_path).unwrap();
+        let mut writer = LineWriter::new(con.try_clone().unwrap());
+        let mut reader = BufReader::new(con);
+        serde_json::to_writer(writer.by_ref(), &q).unwrap();
+        write!(writer.by_ref(), "\n").unwrap();
+        let mut line = String::new();
         loop {
-            match serde_json::from_reader(&con) {
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            match serde_json::from_str(&line) {
                 Ok(m) => r.send(m).unwrap(),
-                Err(_) => break
+                Err(e) => panic!("error reading query reply {}", e)
             }
         }
-    })
+    }).unwrap();
 }

@@ -7,7 +7,7 @@ extern crate serde_json;
 #[macro_use] extern crate log;
 extern crate syslog;
 extern crate libmodbus_rs;
-#[macro_use] extern crate structopt;
+extern crate structopt;
 
 macro_rules! or_fatal {
     ($to_main:ident, $e:expr, $msg:expr) => {
@@ -45,7 +45,7 @@ use structopt::StructOpt;
 use morningstar::prostar_mppt as ps;
 use std::{
     thread, sync::mpsc::{Sender, channel},
-    io::Write, fs, time::{Duration, Instant}
+    io::{Write, LineWriter}, fs, time::{Duration, Instant}
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,9 +104,10 @@ fn log_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> {
             fs::OpenOptions::new().write(true).append(true).create(true).open(&path),
             "failed to open stats log {}"
         );
+        let mut log = LineWriter::new(log);
         for st in receiver.iter() {
-            or_fatal!(to_main, serde_json::to_writer(&log, &st), "failed to write stats {}");
-            or_fatal!(to_main, write!(&log, "\n"), "failed to write record sep {}");
+            or_fatal!(to_main, serde_json::to_writer(log.by_ref(), &st), "failed to write stats {}");
+            or_fatal!(to_main, write!(log.by_ref(), "\n"), "failed to write record sep {}");
             or_fatal!(to_main.send(ToMainLoop::StatsLogged), "thread {} failed to send to main {}");
         }
     }).unwrap();
@@ -130,7 +131,7 @@ fn run_server(config: Config) {
                 while i < tailing.len() {
                     match tailing[i].send(ToClient::Stats(s)) {
                         Ok(()) => i += 1,
-                        Err(_) => tailing.remove(i)
+                        Err(_) => { tailing.remove(i); }
                     }
                 }
             },
@@ -145,8 +146,8 @@ fn run_server(config: Config) {
                 FromClient::ResetController => or_fatal!(
                     mb.send(modbus_loop::Command::Coil(ps::Coil::ResetControl, true)),
                     "{} failed to send modbus command {}"),
-                FromClient::LogRotated => stats_sink = stats_writer(&config, to_main.clone()),
-                FromClient::TailStats(sender) => tailing.push(reply),
+                FromClient::LogRotated => log_sink = log_writer(&config, to_main.clone()),
+                FromClient::TailStats => tailing.push(reply),
                 FromClient::Stop => break,
             },
             ToMainLoop::Tick => {
@@ -208,7 +209,7 @@ fn main() {
     match opt.cmd {
         SubCommand::Start {daemonize} => {
             if daemonize {
-                syslog::init(syslog::Facility::LOG_DAEMON, log::LevelFilter::Trace, Some("solar"))
+                syslog::init(syslog::Facility::LOG_DAEMON, log::LevelFilter::Warn, Some("solar"))
                     .expect("failed to init syslog");
                 let d = Daemonize::new().pid_file(&config.pid_file);
                 match d.start() {
@@ -245,8 +246,7 @@ fn main() {
             .expect("failed to reopen log file"),
         SubCommand::TailStats => {
             let (send, recv) = channel();
-            control_socket::send_query(&config, send, FromClient::TailStats)
-                .expect("failed to tail stats");
+            control_socket::send_query(&config, send, FromClient::TailStats);
             for ToClient::Stats(s) in recv.iter() {
                 println!("{:#?}", s);
             }
