@@ -247,9 +247,7 @@ fn main() {
         SubCommand::TailStats => {
             let (send, recv) = channel();
             control_socket::send_query(&config, send, FromClient::TailStats);
-            for ToClient::Stats(s) in recv.iter() {
-                println!("{:#?}", s);
-            }
+            for ToClient::Stats(s) in recv.iter() { println!("{}", s); }
         }
     }
 }
