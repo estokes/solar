@@ -48,7 +48,7 @@ impl ConWithRetry {
                 Err(e) => {
                     if tries >= 3 { break Err(e) }
                     else {
-                        thread::sleep(Duration::from_millis(5000));
+                        thread::sleep(Duration::from_millis(10000));
                         self.con = None;
                         tries += 1
                     }
@@ -71,11 +71,22 @@ fn modbus_loop(
         }
         last_command = Instant::now();
         match command {
-            Command::Coil(coil, bit) => or_fatal!(
-                to_main,
-                con.eval(move |c| c.write_coil(coil, bit)),
-                "failed to set coil {}"
-            ),
+            Command::Coil(coil, bit) => {
+                match (coil, bit) {
+                    (ps::Coil::ResetControl, true) => {
+                        // the reset coil will always fail because the controller resets
+                        // before sending the reply.
+                        let c = or_fatal!(to_main, con.get_con(), "failed to get con {}");
+                        let _ = c.write_coil(coil, bit);
+                    },
+                    (_, _) =>
+                        or_fatal!(
+                            to_main,
+                            con.eval(move |c| c.write_coil(coil, bit)),
+                            "failed to set coil {}"
+                        )
+                }
+            },
             Command::Stats => {
                 let s = or_fatal!(
                     to_main, con.eval(|c| c.stats()), "failed to get stats {}");

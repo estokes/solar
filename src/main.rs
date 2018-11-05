@@ -186,6 +186,8 @@ enum SubCommand {
     CancelFloat,
     #[structopt(name = "log-rotated")]
     LogRotated,
+    #[structopt(name = "reset-controller")]
+    ResetController,
     #[structopt(name = "tail-stats")]
     TailStats,
 }
@@ -241,6 +243,9 @@ fn main() {
                 FromClient::SetChargingEnabled(false),
                 FromClient::SetChargingEnabled(true)
             ]).expect("failed to cancel float"),
+        SubCommand::ResetController =>
+            control_socket::send_command(&config, once(FromClient::ResetController))
+            .expect("failed to reset the controller"),
         SubCommand::LogRotated =>
             control_socket::send_command(&config, once(FromClient::LogRotated))
             .expect("failed to reopen log file"),
