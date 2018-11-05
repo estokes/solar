@@ -7,6 +7,7 @@ use current_thread;
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum Command {
     Stats,
+    Settings,
     Coil(ps::Coil, bool)
 }
 
@@ -92,7 +93,14 @@ fn modbus_loop(
                     to_main, con.eval(|c| c.stats()), "failed to get stats {}");
                 or_fatal!(
                     to_main.send(ToMainLoop::Stats(s)), "{} failed to send to main {}");
-            }
+            },
+            Command::Settings => {
+                let s = or_fatal!(
+                    to_main, con.eval(|c| c.read_settings()),
+                    "failed to get settings {}");
+                or_fatal!(
+                    to_main.send(ToMainLoop::Settings(s)), "{} failed to send to main {}");
+            },
         }
     }
 }

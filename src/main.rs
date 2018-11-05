@@ -64,17 +64,20 @@ pub(crate) enum FromClient {
     ResetController,
     LogRotated,
     Stop,
-    TailStats
+    TailStats,
+    GetSettings
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) enum ToClient {
     Stats(ps::Stats),
+    Settings(ps::Settings),
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum ToMainLoop {
     Stats(ps::Stats),
+    Settings(ps::Settings),
     StatsLogged,
     FatalError {thread: String, msg: String},
     FromClient(FromClient, Sender<ToClient>),
@@ -123,6 +126,7 @@ fn run_server(config: Config) {
 
     let mut last_stats_written = Instant::now();
     let mut tailing : Vec<Sender<ToClient>> = Vec::new();
+    let mut wait_settings: Vec<Sender<ToClient>> = Vec::new();
     for msg in receiver.iter() {
         match msg {
             ToMainLoop::Stats(s) => {
@@ -133,6 +137,11 @@ fn run_server(config: Config) {
                         Ok(()) => i += 1,
                         Err(_) => { tailing.remove(i); }
                     }
+                }
+            },
+            ToMainLoop::Settings(s) => {
+                for sender in wait_settings.drain(0..) {
+                    let _ = sender.send(ToClient::Settings(s));
                 }
             },
             ToMainLoop::StatsLogged => last_stats_written = Instant::now(),
@@ -148,6 +157,14 @@ fn run_server(config: Config) {
                     "{} failed to send modbus command {}"),
                 FromClient::LogRotated => log_sink = log_writer(&config, to_main.clone()),
                 FromClient::TailStats => tailing.push(reply),
+                FromClient::GetSettings => {
+                    wait_settings.push(reply);
+                    if wait_settings.len() == 1 {
+                        or_fatal!(
+                            mb.send(modbus_loop::Command::Settings),
+                            "{} failed to send modbus command {}");
+                    }
+                },
                 FromClient::Stop => break,
             },
             ToMainLoop::Tick => {
@@ -189,7 +206,15 @@ enum SubCommand {
     #[structopt(name = "reset-controller")]
     ResetController,
     #[structopt(name = "tail-stats")]
-    TailStats,
+    TailStats {
+        #[structopt(short = "j", long = "json")]
+        json: bool
+    },
+    #[structopt(name = "get-settings")]
+    GetSettings {
+        #[structopt(short = "j", long = "json")]
+        json: bool
+    },
 }
 
 #[derive(Debug, StructOpt)]
@@ -249,10 +274,29 @@ fn main() {
         SubCommand::LogRotated =>
             control_socket::send_command(&config, once(FromClient::LogRotated))
             .expect("failed to reopen log file"),
-        SubCommand::TailStats => {
+        SubCommand::TailStats {json} => {
             let (send, recv) = channel();
             control_socket::send_query(&config, send, FromClient::TailStats);
-            for ToClient::Stats(s) in recv.iter() { println!("{}", s); }
+            for m in recv.iter() {
+                match m {
+                    ToClient::Settings(_) => panic!("unexpected response"),
+                    ToClient::Stats(s) => {
+                        if json { println!("{}", serde_json::to_string_pretty(&s).unwrap()) }
+                        else { println!("{}", s) }
+                    }
+                }
+            }
+        },
+        SubCommand::GetSettings {json} => {
+            let (send, recv) = channel();
+            control_socket::send_query(&config, send, FromClient::GetSettings);
+            match recv.recv().unwrap() {
+                ToClient::Stats(_) => panic!("unexpected response"),
+                ToClient::Settings(s) => {
+                    if json { println!("{}", serde_json::to_string_pretty(&s).unwrap()) }
+                    else { println!("{}", s) }
+                },
+            }
         }
     }
 }
