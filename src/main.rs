@@ -3,41 +3,14 @@ extern crate daemonize;
 extern crate morningstar;
 extern crate serde;
 extern crate serde_json;
-#[macro_use] extern crate serde_derive;
-#[macro_use] extern crate log;
 extern crate syslog;
 extern crate libmodbus_rs;
 extern crate structopt;
+#[macro_use] extern crate serde_derive;
+#[macro_use] extern crate log;
+#[macro_use] extern crate error_chain;
 
-macro_rules! or_fatal {
-    ($to_main:ident, $e:expr, $msg:expr) => {
-        match $e {
-            Ok(r) => r,
-            Err(e) => {
-                let thread = current_thread();
-                match $to_main.send(ToMainLoop::FatalError {thread, msg: format!($msg, e)}) {
-                    Ok(()) => (),
-                    Err(_) => error!(
-                        "thread {} failed to send fatal error to main: {}",
-                        current_thread(), format!($msg, e)
-                    )
-                }
-                return
-            }
-        }
-    };
-    ($e:expr, $msg:expr) => {
-        match $e {
-            Ok(r) => r,
-            Err(e) => {
-                error!($msg, current_thread(), e);
-                return
-            }
-        }
-    }
-}
-
-mod modbus_loop;
+mod modbus;
 mod control_socket;
 
 use daemonize::Daemonize;
@@ -48,13 +21,26 @@ use std::{
     io::{Write, LineWriter}, fs, time::{Duration, Instant}
 };
 
+macro_rules! log_fatal {
+    ($e:expr, $m:expr) => {
+        match $e {
+            Ok(r) => r,
+            Err(e) => {
+                error!($m, e);
+                break
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Config {
-    pub(crate) device: String,
-    pub(crate) pid_file: String,
-    pub(crate) stats_log: String,
-    pub(crate) control_socket: String,
-    pub(crate) stats_interval: u64,
+    pub device: String,
+    pub modbus_id: u8,
+    pub pid_file: String,
+    pub stats_log: String,
+    pub control_socket: String,
+    pub stats_interval: u64,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -65,35 +51,28 @@ pub(crate) enum FromClient {
     LogRotated,
     Stop,
     TailStats,
-    GetSettings
+    ReadSettings,
+    WriteSettings,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub(crate) enum ToClient {
     Stats(ps::Stats),
     Settings(ps::Settings),
+    Ok,
+    Err(String)
 }
 
 #[derive(Debug, Clone)]
 pub(crate) enum ToMainLoop {
-    Stats(ps::Stats),
-    Settings(ps::Settings),
-    StatsLogged,
-    FatalError {thread: String, msg: String},
     FromClient(FromClient, Sender<ToClient>),
     Tick
-}
-
-pub(crate) fn current_thread() -> String {
-    thread::current().name()
-        .map(|s| s.to_owned())
-        .unwrap_or_else(|| "<anonymous>".to_owned())
 }
 
 fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
     let interval = Duration::from_millis(cfg.stats_interval);
     thread::Builder::new().name("ticker".into()).stack_size(256).spawn(move || loop {
-        or_fatal!(to_main.send(ToMainLoop::Tick), "thread {} failed to send to main {}");
+        let _ = to_main.send(ToMainLoop::Tick);
         thread::sleep(interval);
     }).unwrap();
 }
@@ -117,67 +96,56 @@ fn log_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> {
     sender
 }
 
+fn open_log(cfg: &Config) -> Result<LineWriter, io::Error> {
+    let log = fs::OpenOptions::new().write(true).append(true).create(true).open(&cfg.stats_log)?;
+    Ok(LineWriter::new(log))
+}
+
+fn reply(r: ps::Result<()>, s: Sender<ToClient>) {
+    match r {
+        Ok(()) => { let _ = s.send(ToClient::Ok); },
+        Err(e) => { let _ = s.send(ToClient::Err(e.to_string()); }
+    }
+}
+
 fn run_server(config: Config) {
     let (to_main, receiver) = channel();
     ticker(&config, to_main.clone());
-    let mut log_sink = log_writer(&config, to_main.clone());
-    let mb = modbus_loop::start(&config, to_main.clone());
-    control_socket::run_server(&config, to_main.clone());;
-
-    let mut last_stats_written = Instant::now();
+    let mut log = open_log(&config);
+    let mb = modbus::Connection::new(config.device.clone(), config.modbus_id);
+    control_socket::run_server(&config, to_main);
     let mut tailing : Vec<Sender<ToClient>> = Vec::new();
-    let mut wait_settings: Vec<Sender<ToClient>> = Vec::new();
+
     for msg in receiver.iter() {
         match msg {
-            ToMainLoop::Stats(s) => {
-                or_fatal!(log_sink.send(s), "{} failed to send stats {}");
+            ToMainLoop::FromClient(msg, reply) => match msg {
+                FromClient::SetChargingEnabled(b) =>
+                    reply(mb.write_coil(ps::Coil::ChargeDisconnect, !b), reply),
+                FromClient::SetLoadEnabled(b) =>
+                    reply(mb.write_coil(ps::Coil::LoadDisconnect, !b), reply),
+                FromClient::ResetController =>
+                    reply(mb.write_coil(ps::Coil::ResetControl, true), reply),
+                FromClient::LogRotated => log = open_log(&config),
+                FromClient::TailStats => tailing.push(reply),
+                FromClient::GetSettings =>
+                    match mb.read_settings() {
+                        Ok(s) => { let _ = reply.send(ToClient::Settings(s)); },
+                        Err(e) => { let _ = reply.send(ToClient::Err(e.to_string())); }
+                    },
+                FromClient::Stop => break,
+            },
+            ToMainLoop::Tick => {
+                let st = log_fatal!(mb.read_stats(), "fatal: failed to read stats {}");
+                log_fatal!(serde_json::to_writer(log.by_ref(), &st), "fatal: failed to log stats {}");
+                log_fatal!(write!(log.by_ref(), "\n"), "fatal: failed to log stats {}");
                 let mut i = 0;
                 while i < tailing.len() {
-                    match tailing[i].send(ToClient::Stats(s)) {
+                    match tailing[i].send(ToClient::Stats(st)) {
                         Ok(()) => i += 1,
                         Err(_) => { tailing.remove(i); }
                     }
                 }
             },
-            ToMainLoop::Settings(s) => {
-                for sender in wait_settings.drain(0..) {
-                    let _ = sender.send(ToClient::Settings(s));
-                }
-            },
-            ToMainLoop::StatsLogged => last_stats_written = Instant::now(),
-            ToMainLoop::FromClient(msg, reply) => match msg {
-                FromClient::SetChargingEnabled(b) => or_fatal!(
-                    mb.send(modbus_loop::Command::Coil(ps::Coil::ChargeDisconnect, !b)),
-                    "{} failed to send modbus command {}"),
-                FromClient::SetLoadEnabled(b) => or_fatal!(
-                    mb.send(modbus_loop::Command::Coil(ps::Coil::LoadDisconnect, !b)),
-                    "{} failed to send modbus command {}"),
-                FromClient::ResetController => or_fatal!(
-                    mb.send(modbus_loop::Command::Coil(ps::Coil::ResetControl, true)),
-                    "{} failed to send modbus command {}"),
-                FromClient::LogRotated => log_sink = log_writer(&config, to_main.clone()),
-                FromClient::TailStats => tailing.push(reply),
-                FromClient::GetSettings => {
-                    wait_settings.push(reply);
-                    if wait_settings.len() == 1 {
-                        or_fatal!(
-                            mb.send(modbus_loop::Command::Settings),
-                            "{} failed to send modbus command {}");
-                    }
-                },
-                FromClient::Stop => break,
-            },
-            ToMainLoop::Tick => {
-                let timeout = Duration::from_millis(config.stats_interval * 4);
-                let elapsed = last_stats_written.elapsed();
-                if elapsed > timeout { warn!("stats logging is delayed {:?}", elapsed) }
-                or_fatal!(mb.send(modbus_loop::Command::Stats),
-                          "{} failed to send to modbus {}")
-            },
-            ToMainLoop::FatalError {thread, msg} => {
-                error!("fatal error {} in thread {}, exiting", msg, thread);
-                break
-            }
         }
     }
 }
@@ -275,11 +243,13 @@ fn main() {
             control_socket::send_command(&config, once(FromClient::LogRotated))
             .expect("failed to reopen log file"),
         SubCommand::TailStats {json} => {
-            let (send, recv) = channel();
-            control_socket::send_query(&config, send, FromClient::TailStats);
-            for m in recv.iter() {
+            let replies =
+                control_socket::send_query(&config, send, FromClient::TailStats)
+                .unwrap("failed to tail stats");
+            for m in replies {
                 match m {
-                    ToClient::Settings(_) => panic!("unexpected response"),
+                    ToClient::Ok | ToClient::Err(_) | ToClient::Settings(_) =>
+                        panic!("unexpected response"),
                     ToClient::Stats(s) => {
                         if json { println!("{}", serde_json::to_string_pretty(&s).unwrap()) }
                         else { println!("{}", s) }
@@ -288,11 +258,14 @@ fn main() {
             }
         },
         SubCommand::GetSettings {json} => {
-            let (send, recv) = channel();
-            control_socket::send_query(&config, send, FromClient::GetSettings);
-            match recv.recv().unwrap() {
-                ToClient::Stats(_) => panic!("unexpected response"),
-                ToClient::Settings(s) => {
+            let replies =
+                control_socket::send_query(&config, send, FromClient::GetSettings)
+                .unwrap("failed to get settings");
+            match replies.next() {
+                None => panic!("no response from server"),
+                Some(ToClient::Stats(_)) | Some(ToClient::Ok) | Some(ToClient::Err(_)) =>
+                    panic!("unexpected response"),
+                Some(ToClient::Settings(s)) => {
                     if json { println!("{}", serde_json::to_string_pretty(&s).unwrap()) }
                     else { println!("{}", s) }
                 },
