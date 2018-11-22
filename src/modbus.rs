@@ -1,6 +1,5 @@
 use morningstar::{error as mse, prostar_mppt as ps};
 use std::{thread::sleep, time::{Instant, Duration}};
-use Config;
 
 pub struct Connection {
     con: Option<ps::Connection>,
@@ -10,7 +9,7 @@ pub struct Connection {
 }
 
 impl Connection {
-    fn new(device: String, address: u8) -> Self {
+    pub fn new(device: String, address: u8) -> Self {
         Connection { con: None, device, address, last_command: Instant::now() }
     }
 
@@ -41,17 +40,17 @@ impl Connection {
                 Err(e) => {
                     if tries >= 4 { break Err(e) }
                     else if tries >= 3 {
-                        thread::sleep(Duration::from_millis(5000));
+                        sleep(Duration::from_millis(5000));
                         self.con = None;
                         match self.get_con() {
                             Err(e) => break Err(e),
                             Ok(con) => {
                                 let _ = con.write_coil(ps::Coil::ResetControl, true);
-                                thread::sleep(Duration::from_millis(5000))
+                                sleep(Duration::from_millis(5000))
                             }
                         }
                     } else {
-                        thread::sleep(Duration::from_millis(1000));
+                        sleep(Duration::from_millis(1000));
                         self.con = None;
                         tries += 1
                     }
@@ -62,9 +61,9 @@ impl Connection {
 
     fn wait_for_throttle(&mut self) {
         let throttle = Duration::from_millis(500);
-        let now = Instant::now()
+        let now = Instant::now();
         let elapsed = now - self.last_command;
-        if elapsed < throttle { thread::sleep(throttle - elapsed) }
+        if elapsed < throttle { sleep(throttle - elapsed) }
         self.last_command = now;
     }
 

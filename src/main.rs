@@ -10,28 +10,29 @@ extern crate structopt;
 #[macro_use] extern crate log;
 #[macro_use] extern crate error_chain;
 
+macro_rules! log_fatal {
+    ($e:expr, $m:expr, $a:expr) => {
+        match $e {
+            Ok(r) => r,
+            Err(e) => {
+                error!($m, e);
+                $a
+            }
+        }
+    }
+}
+
 mod modbus;
 mod control_socket;
 
 use daemonize::Daemonize;
 use structopt::StructOpt;
 use morningstar::prostar_mppt as ps;
+use morningstar::error as mse;
 use std::{
     thread, sync::mpsc::{Sender, channel},
-    io::{Write, LineWriter}, fs, time::{Duration, Instant}
+    io::{self, Write, LineWriter}, fs, time::Duration
 };
-
-macro_rules! log_fatal {
-    ($e:expr, $m:expr) => {
-        match $e {
-            Ok(r) => r,
-            Err(e) => {
-                error!($m, e);
-                break
-            }
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct Config {
@@ -55,7 +56,7 @@ pub(crate) enum FromClient {
     WriteSettings,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) enum ToClient {
     Stats(ps::Stats),
     Settings(ps::Settings),
@@ -77,42 +78,23 @@ fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
     }).unwrap();
 }
 
-fn log_writer(cfg: &Config, to_main: Sender<ToMainLoop>) -> Sender<ps::Stats> {
-    let (sender, receiver) = channel();
-    let path = cfg.stats_log.clone();
-    thread::Builder::new().name("stats".into()).stack_size(4096).spawn(move || {
-        let log = or_fatal!(
-            to_main,
-            fs::OpenOptions::new().write(true).append(true).create(true).open(&path),
-            "failed to open stats log {}"
-        );
-        let mut log = LineWriter::new(log);
-        for st in receiver.iter() {
-            or_fatal!(to_main, serde_json::to_writer(log.by_ref(), &st), "failed to write stats {}");
-            or_fatal!(to_main, write!(log.by_ref(), "\n"), "failed to write record sep {}");
-            or_fatal!(to_main.send(ToMainLoop::StatsLogged), "thread {} failed to send to main {}");
-        }
-    }).unwrap();
-    sender
-}
-
-fn open_log(cfg: &Config) -> Result<LineWriter, io::Error> {
+fn open_log(cfg: &Config) -> Result<LineWriter<fs::File>, io::Error> {
     let log = fs::OpenOptions::new().write(true).append(true).create(true).open(&cfg.stats_log)?;
     Ok(LineWriter::new(log))
 }
 
-fn reply(r: ps::Result<()>, s: Sender<ToClient>) {
+fn send_reply(r: mse::Result<()>, s: Sender<ToClient>) {
     match r {
         Ok(()) => { let _ = s.send(ToClient::Ok); },
-        Err(e) => { let _ = s.send(ToClient::Err(e.to_string()); }
+        Err(e) => { let _ = s.send(ToClient::Err(e.to_string())); }
     }
 }
 
 fn run_server(config: Config) {
     let (to_main, receiver) = channel();
     ticker(&config, to_main.clone());
-    let mut log = open_log(&config);
-    let mb = modbus::Connection::new(config.device.clone(), config.modbus_id);
+    let mut log = log_fatal!(open_log(&config), "failed to open log {}", return);
+    let mut mb = modbus::Connection::new(config.device.clone(), config.modbus_id);
     control_socket::run_server(&config, to_main);
     let mut tailing : Vec<Sender<ToClient>> = Vec::new();
 
@@ -120,14 +102,16 @@ fn run_server(config: Config) {
         match msg {
             ToMainLoop::FromClient(msg, reply) => match msg {
                 FromClient::SetChargingEnabled(b) =>
-                    reply(mb.write_coil(ps::Coil::ChargeDisconnect, !b), reply),
+                    send_reply(mb.write_coil(ps::Coil::ChargeDisconnect, !b), reply),
                 FromClient::SetLoadEnabled(b) =>
-                    reply(mb.write_coil(ps::Coil::LoadDisconnect, !b), reply),
+                    send_reply(mb.write_coil(ps::Coil::LoadDisconnect, !b), reply),
                 FromClient::ResetController =>
-                    reply(mb.write_coil(ps::Coil::ResetControl, true), reply),
-                FromClient::LogRotated => log = open_log(&config),
+                    send_reply(mb.write_coil(ps::Coil::ResetControl, true), reply),
+                FromClient::LogRotated =>
+                    log = log_fatal!(open_log(&config), "failed to open log {}", break),
                 FromClient::TailStats => tailing.push(reply),
-                FromClient::GetSettings =>
+                FromClient::WriteSettings => { let _ = reply.send(ToClient::Ok); },
+                FromClient::ReadSettings =>
                     match mb.read_settings() {
                         Ok(s) => { let _ = reply.send(ToClient::Settings(s)); },
                         Err(e) => { let _ = reply.send(ToClient::Err(e.to_string())); }
@@ -135,9 +119,9 @@ fn run_server(config: Config) {
                 FromClient::Stop => break,
             },
             ToMainLoop::Tick => {
-                let st = log_fatal!(mb.read_stats(), "fatal: failed to read stats {}");
-                log_fatal!(serde_json::to_writer(log.by_ref(), &st), "fatal: failed to log stats {}");
-                log_fatal!(write!(log.by_ref(), "\n"), "fatal: failed to log stats {}");
+                let st = log_fatal!(mb.read_stats(), "fatal: failed to read stats {}", break);
+                log_fatal!(serde_json::to_writer(log.by_ref(), &st), "fatal: failed to log stats {}", break);
+                log_fatal!(write!(log.by_ref(), "\n"), "fatal: failed to log stats {}", break);
                 let mut i = 0;
                 while i < tailing.len() {
                     match tailing[i].send(ToClient::Stats(st)) {
@@ -243,9 +227,9 @@ fn main() {
             control_socket::send_command(&config, once(FromClient::LogRotated))
             .expect("failed to reopen log file"),
         SubCommand::TailStats {json} => {
-            let replies =
-                control_socket::send_query(&config, send, FromClient::TailStats)
-                .unwrap("failed to tail stats");
+            let mut replies =
+                control_socket::send_query(&config, FromClient::TailStats)
+                .expect("failed to tail stats");
             for m in replies {
                 match m {
                     ToClient::Ok | ToClient::Err(_) | ToClient::Settings(_) =>
@@ -258,9 +242,9 @@ fn main() {
             }
         },
         SubCommand::GetSettings {json} => {
-            let replies =
-                control_socket::send_query(&config, send, FromClient::GetSettings)
-                .unwrap("failed to get settings");
+            let mut replies =
+                control_socket::send_query(&config, FromClient::ReadSettings)
+                .expect("failed to get settings");
             match replies.next() {
                 None => panic!("no response from server"),
                 Some(ToClient::Stats(_)) | Some(ToClient::Ok) | Some(ToClient::Err(_)) =>
