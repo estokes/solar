@@ -1,41 +1,7 @@
-extern crate simple_logger;
-extern crate daemonize;
-extern crate morningstar;
-extern crate serde;
-extern crate serde_json;
+#![feature(await_macro, async_await, futures_api)]
 #[macro_use] extern crate serde_derive;
 #[macro_use] extern crate log;
-extern crate syslog;
-extern crate libmodbus_rs;
-extern crate structopt;
-
-macro_rules! or_fatal {
-    ($to_main:ident, $e:expr, $msg:expr) => {
-        match $e {
-            Ok(r) => r,
-            Err(e) => {
-                let thread = current_thread();
-                match $to_main.send(ToMainLoop::FatalError {thread, msg: format!($msg, e)}) {
-                    Ok(()) => (),
-                    Err(_) => error!(
-                        "thread {} failed to send fatal error to main: {}",
-                        current_thread(), format!($msg, e)
-                    )
-                }
-                return
-            }
-        }
-    };
-    ($e:expr, $msg:expr) => {
-        match $e {
-            Ok(r) => r,
-            Err(e) => {
-                error!($msg, current_thread(), e);
-                return
-            }
-        }
-    }
-}
+#[macro_use] extern crate tokio;
 
 mod modbus_loop;
 mod control_socket;
