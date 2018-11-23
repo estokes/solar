@@ -49,6 +49,7 @@ impl Connection {
                                 sleep(Duration::from_millis(5000))
                             }
                         }
+                        tries += 1
                     } else {
                         sleep(Duration::from_millis(1000));
                         self.con = None;
@@ -89,5 +90,10 @@ impl Connection {
     pub fn read_settings(&mut self) -> mse::Result<ps::Settings> {
         self.wait_for_throttle();
         Ok(self.eval(|c| c.read_settings())?)
+    }
+
+    pub fn write_settings(&mut self, settings: &ps::Settings) -> mse::Result<()> {
+        self.wait_for_throttle();
+        Ok(self.eval(|c| c.write_settings(settings))?)
     }
 }

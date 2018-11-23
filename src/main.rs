@@ -53,7 +53,7 @@ pub(crate) enum FromClient {
     Stop,
     TailStats,
     ReadSettings,
-    WriteSettings,
+    WriteSettings(ps::Settings),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -110,13 +110,18 @@ fn run_server(config: Config) {
                 FromClient::LogRotated =>
                     log = log_fatal!(open_log(&config), "failed to open log {}", break),
                 FromClient::TailStats => tailing.push(reply),
-                FromClient::WriteSettings => { let _ = reply.send(ToClient::Ok); },
+                FromClient::WriteSettings(settings) =>
+                    send_reply(mb.write_settings(&settings), reply),
                 FromClient::ReadSettings =>
                     match mb.read_settings() {
                         Ok(s) => { let _ = reply.send(ToClient::Settings(s)); },
                         Err(e) => { let _ = reply.send(ToClient::Err(e.to_string())); }
                     },
-                FromClient::Stop => break,
+                FromClient::Stop => {
+                    let _ = reply.send(ToClient::Ok);
+                    thread::sleep(Duration::from_millis(200));
+                    break
+                },
             },
             ToMainLoop::Tick => {
                 let st = log_fatal!(mb.read_stats(), "fatal: failed to read stats {}", break);
@@ -162,11 +167,15 @@ enum SubCommand {
         #[structopt(short = "j", long = "json")]
         json: bool
     },
-    #[structopt(name = "get-settings")]
-    GetSettings {
+    #[structopt(name = "read-settings")]
+    ReadSettings {
         #[structopt(short = "j", long = "json")]
         json: bool
     },
+    #[structopt(name = "write-settings")]
+    WriteSettings {
+        file: String
+    }
 }
 
 #[derive(Debug, StructOpt)]
@@ -241,7 +250,7 @@ fn main() {
                 }
             }
         },
-        SubCommand::GetSettings {json} => {
+        SubCommand::ReadSettings {json} => {
             let mut replies =
                 control_socket::send_query(&config, FromClient::ReadSettings)
                 .expect("failed to get settings");
@@ -254,6 +263,13 @@ fn main() {
                     else { println!("{}", s) }
                 },
             }
-        }
+        },
+        SubCommand::WriteSettings {file} => {
+            let file = fs::File::open(&file).expect("failed to open settings");
+            let settings =
+                serde_json::from_reader(&file).expect("failed to parse settings");
+            control_socket::send_command(&config, once(FromClient::WriteSettings(settings)))
+                .expect("failed to write settings")
+        },
     }
 }
