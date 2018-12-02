@@ -107,8 +107,10 @@ fn run_server(config: Config) {
                     send_reply(mb.write_coil(ps::Coil::LoadDisconnect, !b), reply),
                 FromClient::ResetController =>
                     send_reply(mb.write_coil(ps::Coil::ResetControl, true), reply),
-                FromClient::LogRotated =>
-                    log = log_fatal!(open_log(&config), "failed to open log {}", break),
+                FromClient::LogRotated => {
+                    log = log_fatal!(open_log(&config), "failed to open log {}", break);
+                    send_reply(ToClient::Ok)
+                },
                 FromClient::TailStats => tailing.push(reply),
                 FromClient::WriteSettings(settings) =>
                     send_reply(mb.write_settings(&settings), reply),
