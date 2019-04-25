@@ -61,7 +61,7 @@ impl Connection {
     }
 
     fn wait_for_throttle(&mut self) {
-        let throttle = Duration::from_millis(500);
+        let throttle = Duration::from_secs(1);
         let now = Instant::now();
         let elapsed = now - self.last_command;
         if elapsed < throttle { sleep(throttle - elapsed) }

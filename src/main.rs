@@ -215,10 +215,18 @@ fn main() {
             control_socket::send_command(&config, once(FromClient::Stop))
             .expect("failed to stop the daemon"),
         SubCommand::DisableLoad =>
-            control_socket::send_command(&config, once(FromClient::SetLoadEnabled(false)))
+            control_socket::send_command(&config, &[
+                FromClient::SetChargingEnabled(false),
+                FromClient::SetLoadEnabled(false),
+                FromClient::SetChargingEnabled(true)
+            ])
             .expect("failed to disable load. Is the daemon running?"),
         SubCommand::EnableLoad =>
-            control_socket::send_command(&config, once(FromClient::SetLoadEnabled(true)))
+            control_socket::send_command(&config, &[
+                FromClient::SetChargingEnabled(false),
+                FromClient::SetLoadEnabled(true),
+                FromClient::SetChargingEnabled(true),
+            ])
             .expect("failed to enable load. Is the daemon running?"),
         SubCommand::DisableCharging =>
             control_socket::send_command(&config, once(FromClient::SetChargingEnabled(false)))
