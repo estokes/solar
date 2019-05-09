@@ -6,6 +6,7 @@ extern crate serde_json;
 extern crate syslog;
 extern crate libmodbus_rs;
 extern crate structopt;
+extern crate rppal;
 #[macro_use] extern crate serde_derive;
 #[macro_use] extern crate log;
 #[macro_use] extern crate error_chain;
