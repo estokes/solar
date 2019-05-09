@@ -301,7 +301,7 @@ fn main() {
                 2 => rpi::Relay::R2,
                 3 => rpi::Relay::R3,
                 n => panic!("invalid relay {}", n)
-            }
+            };
             control_socket::send_command(&config, once(FromClient::SetRelay(relay, status)))
                 .expect("failed to set relay")
         },
