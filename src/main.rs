@@ -23,6 +23,7 @@ macro_rules! log_fatal {
     }
 }
 
+mod rpi;
 mod modbus;
 mod control_socket;
 
