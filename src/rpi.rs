@@ -1,5 +1,6 @@
 use rppal::gpio::{Gpio, OutputPin, Result};
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 #[repr(u8)]
 pub enum Relay {
     R0 = 26,
@@ -32,6 +33,14 @@ impl Relays {
             Relay::R1 => &mut self.r1,
             Relay::R2 => &mut self.r2,
             Relay::R3 => &mut self.r3,
+        }
+    }
+
+    pub fn set(&mut self, r: Relay, state: bool) {
+        if state {
+            self.on(r);
+        } else {
+            self.off(r);
         }
     }
 
