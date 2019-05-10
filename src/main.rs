@@ -189,7 +189,7 @@ enum SubCommand {
     #[structopt(name = "set-relay")]
     SetRelay {
         relay: u8,
-        status: bool,
+        status: u8,
     }
 }
 
@@ -301,6 +301,11 @@ fn main() {
                 2 => rpi::Relay::R2,
                 3 => rpi::Relay::R3,
                 n => panic!("invalid relay {}", n)
+            };
+            let status = match status {
+                0 => false,
+                1 => true,
+                n => panic!("invalid relay status {}", n))
             };
             control_socket::send_command(&config, once(FromClient::SetRelay(relay, status)))
                 .expect("failed to set relay")
