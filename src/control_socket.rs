@@ -80,7 +80,7 @@ pub(crate) fn send_command(
     let mut line = String::new();
     for cmd in cmds {
         serde_json::to_writer(writer.by_ref(), cmd.borrow())?;
-        write!(writer.by_ref(), "\n");
+        write!(writer.by_ref(), "\n")?;
         line.clear();
         reader.read_line(&mut line).unwrap();
         match serde_json::from_str(&line)? {

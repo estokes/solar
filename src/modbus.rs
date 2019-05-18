@@ -1,7 +1,9 @@
 use morningstar::{error as mse, prostar_mppt as ps};
+use rpi::Rpi;
 use std::{thread::sleep, time::{Instant, Duration}};
 
 pub struct Connection {
+    rpi: Rpi,
     con: Option<ps::Connection>,
     device: String,
     address: u8,
@@ -10,7 +12,11 @@ pub struct Connection {
 
 impl Connection {
     pub fn new(device: String, address: u8) -> Self {
-        Connection { con: None, device, address, last_command: Instant::now() }
+        let mut rpi =
+            log_fatal!(Rpi::new(), "failed to init gpio {}",
+                       panic!("failed to init gpio"));
+        rpi.mpptc_enable();
+        Connection { rpi, con: None, device, address, last_command: Instant::now() }
     }
 
     fn get_con(&mut self) -> mse::Result<&ps::Connection> {
@@ -40,15 +46,8 @@ impl Connection {
                 Err(e) => {
                     if tries >= 4 { break Err(e) }
                     else if tries >= 3 {
-                        sleep(Duration::from_millis(5000));
                         self.con = None;
-                        match self.get_con() {
-                            Err(e) => break Err(e),
-                            Ok(con) => {
-                                let _ = con.write_coil(ps::Coil::ResetControl, true);
-                                sleep(Duration::from_millis(5000))
-                            }
-                        }
+                        self.rpi.mpptc_reboot();
                         tries += 1
                     } else {
                         sleep(Duration::from_millis(1000));

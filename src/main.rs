@@ -56,7 +56,6 @@ pub(crate) enum FromClient {
     TailStats,
     ReadSettings,
     WriteSettings(ps::Settings),
-    SetRelay(rpi::Relay, bool),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,7 +99,6 @@ fn run_server(config: Config) {
     let mut mb = modbus::Connection::new(config.device.clone(), config.modbus_id);
     control_socket::run_server(&config, to_main);
     let mut tailing : Vec<Sender<ToClient>> = Vec::new();
-    let mut rl = log_fatal!(rpi::Relays::new(), "failed to init gpio {}", return);
 
     for msg in receiver.iter() {
         match msg {
@@ -123,10 +121,6 @@ fn run_server(config: Config) {
                         Ok(s) => { let _ = reply.send(ToClient::Settings(s)); },
                         Err(e) => { let _ = reply.send(ToClient::Err(e.to_string())); }
                     },
-                FromClient::SetRelay(r, s) => {
-                    rl.set(r, s);
-                    send_reply(Ok(()), reply);
-                },
                 FromClient::Stop => {
                     let _ = reply.send(ToClient::Ok);
                     thread::sleep(Duration::from_millis(200));
@@ -186,11 +180,6 @@ enum SubCommand {
     WriteSettings {
         file: String
     },
-    #[structopt(name = "set-relay")]
-    SetRelay {
-        relay: u8,
-        status: bool,
-    }
 }
 
 #[derive(Debug, StructOpt)]
@@ -293,17 +282,6 @@ fn main() {
                 serde_json::from_reader(&file).expect("failed to parse settings");
             control_socket::send_command(&config, once(FromClient::WriteSettings(settings)))
                 .expect("failed to write settings")
-        },
-        SubCommand::SetRelay {relay, status} => {
-            let relay = match relay {
-                0 => rpi::Relay::R0,
-                1 => rpi::Relay::R1,
-                2 => rpi::Relay::R2,
-                3 => rpi::Relay::R3,
-                n => panic!("invalid relay {}", n)
-            };
-            control_socket::send_command(&config, once(FromClient::SetRelay(relay, status)))
-                .expect("failed to set relay")
         },
     }
 }
