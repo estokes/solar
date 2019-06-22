@@ -1,0 +1,9 @@
+[package]
+name = "solar-gui"
+version = "0.1.0"
+authors = ["Eric Stokes <letaris@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+actix-web = "1.0"
+solar-client = {path = "../solar-client"}
