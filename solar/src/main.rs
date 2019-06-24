@@ -252,14 +252,12 @@ fn main() {
             solar_client::send_command(&config, once(FromClient::ResetController))
                 .expect("failed to reset the controller")
         }
-        SubCommand::LogRotated => {
-            solar_client::send_command(&config, once(FromClient::LogRotated))
-                .expect("failed to reopen log file")
-        }
+        SubCommand::LogRotated => solar_client::send_command(&config, once(FromClient::LogRotated))
+            .expect("failed to reopen log file"),
         SubCommand::TailStats { json } => {
-            let mut replies = solar_client::send_query(&config, FromClient::TailStats)
-                .expect("failed to tail stats");
-            for m in replies {
+            for m in solar_client::send_query(&config, FromClient::TailStats)
+                .expect("failed to tail stats")
+            {
                 match m {
                     ToClient::Ok | ToClient::Err(_) | ToClient::Settings(_) => {
                         panic!("unexpected response")
@@ -275,9 +273,10 @@ fn main() {
             }
         }
         SubCommand::ReadSettings { json } => {
-            let mut replies = solar_client::send_query(&config, FromClient::ReadSettings)
-                .expect("failed to get settings");
-            match replies.next() {
+            match solar_client::send_query(&config, FromClient::ReadSettings)
+                .expect("failed to get settings")
+                .next()
+            {
                 None => panic!("no response from server"),
                 Some(ToClient::Stats(_)) | Some(ToClient::Ok) | Some(ToClient::Err(_)) => {
                     panic!("unexpected response")

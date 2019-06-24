@@ -1,3 +1,8 @@
+#[macro_use]
+extern crate serde_derive;
+#[macro_use]
+extern crate error_chain;
+
 use morningstar::prostar_mppt as ps;
 use std::{
     borrow::Borrow,

@@ -1,5 +1,5 @@
 use morningstar::{error as mse, prostar_mppt as ps};
-use rpi::Rpi;
+use crate::rpi::Rpi;
 use std::{thread::sleep, time::{Instant, Duration}};
 
 pub struct Connection {

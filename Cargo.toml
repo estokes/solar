@@ -1,18 +1,2 @@
-[package]
-name = "solar"
-version = "0.1.0"
-authors = ["Eric Stokes <letaris@gmail.com>"]
-
-[dependencies]
-structopt = "0.2"
-libmodbus-rs = "0.8"
-morningstar = {path = "../morningstar"}
-serde = "1.0"
-serde_json = "1.0"
-serde_derive = "1.0"
-log = "0.4"
-syslog = "4.0"
-simple_logger = "1.0"
-daemonize = "0.3"
-error-chain = "0.12"
-rppal = "0.11"
+[workspace]
+members = ["solar", "solar-client", "solar-gui"]
