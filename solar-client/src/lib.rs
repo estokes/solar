@@ -6,6 +6,7 @@ extern crate error_chain;
 use morningstar::prostar_mppt as ps;
 use std::{
     borrow::Borrow,
+    fs,
     io::{self, BufRead, BufReader, LineWriter, Write},
     iter::Iterator,
     os::unix::net::UnixStream,
@@ -46,6 +47,13 @@ error_chain! {
         SerdeJson(serde_json::Error);
         Io(io::Error);
     }
+}
+
+// panics if it can't load
+pub fn load_config(path: Option<&str>) -> Config {
+    let path = path.unwrap_or("/etc/solar.conf");
+    let f = fs::File::open(path).expect("failed to open config file");
+    serde_json::from_reader(f).expect("failed to parse config file")
 }
 
 pub fn send_command(

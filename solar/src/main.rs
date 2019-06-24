@@ -188,10 +188,7 @@ struct Options {
 
 fn main() {
     let opt = Options::from_args();
-    let config: Config = {
-        let f = fs::File::open(&opt.config).expect("failed to open config file");
-        serde_json::from_reader(f).expect("failed to parse config file")
-    };
+    let config = solar_client::load_config(Some(&opt.config));
     use std::iter::once;
     match opt.cmd {
         SubCommand::Start { daemonize } => {
