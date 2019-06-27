@@ -21,7 +21,7 @@ impl Actor for ControlSocket {
 
     fn started(&mut self, ctx: &mut Self::Context) {
         let stats = self.stats.clone();
-        ctx.run_interval(STATS_INTERVAL, move |act, ctx| {
+        ctx.run_interval(STATS_INTERVAL, move |_act, ctx| {
             match *stats.read().unwrap() {
                 None => (),
                 Some(ref s) => ctx.text(format!("{}", s)),
