@@ -6,6 +6,8 @@ edition = "2018"
 
 [dependencies]
 actix-web = "1.0"
+actix-web-actors = "1.0"
+actix-files = "0.1"
 solar-client = {path = "../solar-client"}
 morningstar = {path = "../../morningstar"}
 env_logger = "0.6"

@@ -1,4 +1,5 @@
 use actix_web::{middleware, web, App, HttpRequest, HttpServer};
+use actix_files;
 use morningstar::prostar_mppt::Stats;
 use solar_client::{load_config, send_query, FromClient, ToClient};
 use std::{
@@ -28,13 +29,12 @@ fn main() -> std::io::Result<()> {
         App::new()
             .data(stats)
             .wrap(middleware::Logger::default())
-            .service(web::resource("/").to(|r: HttpRequest| {
-                let stats = r.app_data::<Arc<RwLock<Option<Stats>>>>().unwrap();
-                match *stats.read().unwrap() {
-                    None => format!("no stats"),
-                    Some(s) => format!("{}", s),
-                }
-            }))
+            .service(web::resource("/").route(web::get().to(|| {
+                HttpResponse::Found()
+                    .header("LOCATION", "/static/index.html")
+                    .finish()
+            })))
+            .service(actix_files::Files::new("/static/", "/static/"))
     })
     .bind("0.0.0.0:8080")?
     .run()
