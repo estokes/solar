@@ -1,11 +1,11 @@
 function loop() {
-    var con = new WebSocket('ws://' + window.location.host + '/ws');
-    $('#status').text = 'Connecting';
+    var con = new WebSocket('ws://' + window.location.host + '/ws/');
+    $('#status').text('Connecting');
     con.onopen = function() {
-	$('#status').text = 'Connected ' + con.protocol;
+	$('#status').text('Connected ' + con.protocol);
     };
     con.onmessage = function(e) {
-	$('#stats').html = e.data;
+	$('#stats').html(e.data);
     };
     con.onclose = loop;
     con.onerror = loop;
