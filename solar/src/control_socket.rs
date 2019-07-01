@@ -5,6 +5,7 @@ use std::{
     fs,
     io::{self, BufRead, BufReader, LineWriter, Write},
     os::unix::net::{UnixListener, UnixStream},
+    path::PathBuf,
     sync::mpsc::{channel, Sender},
     thread,
 };
@@ -49,7 +50,7 @@ fn client_loop(stream: UnixStream, to_main: Sender<ToMainLoop>) {
     }
 }
 
-fn accept_loop(path: String, to_main: Sender<ToMainLoop>) {
+fn accept_loop(path: PathBuf, to_main: Sender<ToMainLoop>) {
     let _ = fs::remove_file(&path);
     let listener = log_fatal!(
         UnixListener::bind(&path),
@@ -74,7 +75,7 @@ fn accept_loop(path: String, to_main: Sender<ToMainLoop>) {
 }
 
 pub(crate) fn run_server(cfg: &Config, to_main: Sender<ToMainLoop>) {
-    let path = cfg.control_socket.clone();
+    let path = cfg.control_socket();
     let to_main_ = to_main.clone();
     thread::Builder::new()
         .name("client_listener".into())

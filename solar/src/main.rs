@@ -57,7 +57,7 @@ fn open_log(cfg: &Config) -> Result<LineWriter<fs::File>, io::Error> {
         .write(true)
         .append(true)
         .create(true)
-        .open(&cfg.stats_log)?;
+        .open(&cfg.log_file())?;
     Ok(LineWriter::new(log))
 }
 
@@ -199,7 +199,7 @@ fn main() {
                     Some("solar"),
                 )
                 .expect("failed to init syslog");
-                let d = Daemonize::new().pid_file(&config.pid_file);
+                let d = Daemonize::new().pid_file(&config.pid_file());
                 match d.start() {
                     Ok(()) => run_server(config),
                     Err(e) => panic!("failed to daemonize: {}", e),

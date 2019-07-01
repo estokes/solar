@@ -10,6 +10,7 @@ use std::{
     io::{self, BufRead, BufReader, LineWriter, Write},
     iter::Iterator,
     os::unix::net::UnixStream,
+    path::{PathBuf, Path},
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -36,10 +37,30 @@ pub enum ToClient {
 pub struct Config {
     pub device: String,
     pub modbus_id: u8,
-    pub pid_file: String,
-    pub stats_log: String,
-    pub control_socket: String,
+    pub run_directory: PathBuf,
+    pub archive_directory: PathBuf,
     pub stats_interval: u64,
+}
+
+fn cat_paths(p0: impl AsRef<Path>, p1: impl AsRef<Path>) -> PathBuf {
+    let mut buf = PathBuf::new();
+    buf.push(p0);
+    buf.push(p1);
+    buf
+}
+
+impl Config {
+    pub fn pid_file(&self) -> PathBuf {
+        cat_paths(&self.run_directory, "solar.pid")
+    }
+
+    pub fn control_socket(&self) -> PathBuf {
+        cat_paths(&self.run_directory, "control")
+    }
+
+    pub fn log_file(&self) -> PathBuf {
+        cat_paths(&self.run_directory, "solar.log")
+    }
 }
 
 error_chain! {
@@ -60,7 +81,7 @@ pub fn send_command(
     cfg: &Config,
     cmds: impl IntoIterator<Item = impl Borrow<FromClient>>,
 ) -> Result<()> {
-    let con = UnixStream::connect(&cfg.control_socket)?;
+    let con = UnixStream::connect(&cfg.control_socket())?;
     let mut writer = LineWriter::new(con.try_clone()?);
     let mut reader = BufReader::new(con);
     let mut line = String::new();
@@ -103,7 +124,7 @@ impl Iterator for Query {
 }
 
 pub fn send_query(cfg: &Config, q: FromClient) -> Result<impl Iterator<Item = ToClient>> {
-    let socket_path = cfg.control_socket.clone();
+    let socket_path = cfg.control_socket();
     let con = UnixStream::connect(&socket_path).unwrap();
     let mut writer = LineWriter::new(con.try_clone()?);
     serde_json::to_writer(writer.by_ref(), &q)?;
