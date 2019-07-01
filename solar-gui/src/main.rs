@@ -24,7 +24,7 @@ impl Actor for ControlSocket {
         ctx.run_interval(STATS_INTERVAL, move |_act, ctx| {
             match *stats.read().unwrap() {
                 None => (),
-                Some(ref s) => ctx.text(format!("{}", s)),
+                Some(ref s) => ctx.text(serde_json::to_string(s).unwrap_or(String::new())),
             }
         });
     }
