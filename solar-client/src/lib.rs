@@ -4,6 +4,8 @@ extern crate serde_derive;
 extern crate error_chain;
 
 use morningstar::prostar_mppt as ps;
+use chrono;
+
 use std::{
     borrow::Borrow,
     fs,
@@ -25,9 +27,14 @@ pub enum FromClient {
     WriteSettings(ps::Settings),
 }
 
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub enum Stats {
+    V0(ps::Stats),
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToClient {
-    Stats(ps::Stats),
+    Stats(Stats),
     Settings(ps::Settings),
     Ok,
     Err(String),
@@ -60,6 +67,11 @@ impl Config {
 
     pub fn log_file(&self) -> PathBuf {
         cat_paths(&self.run_directory, "solar.log")
+    }
+
+    pub fn archive_for_date(&self, date: chrono::Date<chrono::offset::Utc>) -> PathBuf {
+        let d = date.format("%Y%m%d");
+        cat_paths(&self.archive_directory, format!("solar.log-{}.gz", d))
     }
 }
 

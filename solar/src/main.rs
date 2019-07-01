@@ -21,6 +21,7 @@ mod control_socket;
 mod modbus;
 mod rpi;
 
+use chrono;
 use daemonize::Daemonize;
 use morningstar::error as mse;
 use morningstar::prostar_mppt as ps;
@@ -28,6 +29,7 @@ use solar_client::{self, Config, FromClient, ToClient};
 use std::{
     fs,
     io::{self, LineWriter, Write},
+    path::Path,
     sync::mpsc::{channel, Sender},
     thread,
     time::Duration,
@@ -115,7 +117,11 @@ fn run_server(config: Config) {
                 }
             },
             ToMainLoop::Tick => {
-                let st = log_fatal!(mb.read_stats(), "fatal: failed to read stats {}", break);
+                let st = solar_client::Stats(log_fatal!(
+                    mb.read_stats(),
+                    "fatal: failed to read stats {}",
+                    break
+                ));
                 log_fatal!(
                     serde_json::to_writer(log.by_ref(), &st),
                     "fatal: failed to log stats {}",
@@ -140,6 +146,42 @@ fn run_server(config: Config) {
     }
 }
 
+fn file_exists(path: &Path) -> bool {
+    match fs::metadata(&todays) {
+        Ok(m) => m.is_file(),
+        Error(e) => e.kind = std::io::ErrorKind::NotFound,
+    }
+}
+
+fn rotate_log(cfg: &Config) {
+    use libflate::gzip::Encoder;
+    use std::{fs::OpenOptions, io};
+    let todays = cfg.archive_for_date(chrono::Utc::today());
+    if file_exists(&todays) {
+        println!("nothing to do");
+    } else {
+        let current = cfg.log_file();
+        let mut tmp = current.clone();
+        tmp.set_extension("tmp");
+        fs::hard_link(&current, &tmp).expect("failed to create tmp file");
+        fs::remove_file(&current).expect("failed to unlink current file");
+        solar_client::send_command(&config, once(FromClient::LogRotated))
+            .expect("failed to reopen log file");
+        let encoder = Encoder::new(
+            OpenOptions::new()
+                .write(true)
+                .create(true)
+                .open(&todays)
+                .expect("failed to open archive file"),
+        );
+        io::copy(
+            &mut fs::File::open(&tmp).expect("failed to open tmp file"),
+            &mut encoder,
+        ).expect("failed to copy tmp file to the archive");
+        fs::remove_file(&tmp).expect("failed to remove tmp file");
+    }
+}
+
 #[derive(Debug, StructOpt)]
 enum SubCommand {
     #[structopt(name = "start")]
@@ -159,8 +201,8 @@ enum SubCommand {
     EnableCharging,
     #[structopt(name = "cancel-float")]
     CancelFloat,
-    #[structopt(name = "log-rotated")]
-    LogRotated,
+    #[structopt(name = "rotate-log")]
+    RotateLog,
     #[structopt(name = "reset-controller")]
     ResetController,
     #[structopt(name = "tail-stats")]
@@ -249,8 +291,7 @@ fn main() {
             solar_client::send_command(&config, once(FromClient::ResetController))
                 .expect("failed to reset the controller")
         }
-        SubCommand::LogRotated => solar_client::send_command(&config, once(FromClient::LogRotated))
-            .expect("failed to reopen log file"),
+        SubCommand::RotateLog => rotate_logs(&config),
         SubCommand::TailStats { json } => {
             for m in solar_client::send_query(&config, FromClient::TailStats)
                 .expect("failed to tail stats")
