@@ -116,7 +116,7 @@ fn run_server(config: Config) {
                 }
             },
             ToMainLoop::Tick => {
-                let st = solar_client::Stats::V0(log_fatal!(
+                let st = Stats::V0(log_fatal!(
                     mb.read_stats(),
                     "fatal: failed to read stats {}",
                     break
@@ -254,7 +254,7 @@ fn main() {
             solar_client::send_command(&config, once(FromClient::ResetController))
                 .expect("failed to reset the controller")
         }
-        SubCommand::RotateLog => archive::rotate_log(&config),
+        SubCommand::RotateLog => archive::archive_todays_log(&config),
         SubCommand::TailStats { json } => {
             for m in solar_client::send_query(&config, FromClient::TailStats)
                 .expect("failed to tail stats")

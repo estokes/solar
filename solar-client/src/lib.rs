@@ -3,8 +3,8 @@ extern crate serde_derive;
 #[macro_use]
 extern crate error_chain;
 
+use chrono::prelude::*;
 use morningstar::prostar_mppt as ps;
-use chrono;
 
 use std::{
     borrow::Borrow,
@@ -12,7 +12,7 @@ use std::{
     io::{self, BufRead, BufReader, LineWriter, Write},
     iter::Iterator,
     os::unix::net::UnixStream,
-    path::{PathBuf, Path},
+    path::{Path, PathBuf},
 };
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -32,10 +32,18 @@ pub enum Stats {
     V0(ps::Stats),
 }
 
+impl Stats {
+    pub fn timestamp(&self) -> chrono::DateTime<chrono::offset::Local> {
+        match self {
+            Stats::V0(ref s) => s.timestamp
+        }
+    }
+}
+
 impl std::fmt::Display for Stats {
     fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         match self {
-            Stats::V0(s) => s.fmt(fmt)
+            Stats::V0(s) => s.fmt(fmt),
         }
     }
 }
@@ -46,6 +54,50 @@ pub enum ToClient {
     Settings(ps::Settings),
     Ok,
     Err(String),
+}
+
+#[derive(Debug)]
+struct UnexpectedObjectKind;
+
+impl std::error::Error for UnexpectedObjectKind {}
+impl std::fmt::Display for UnexpectedObjectKind {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        write!(fmt, "expected a file, found something else")
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArchivedDay {
+    pub all: PathBuf,
+    pub one_minute_averages: PathBuf,
+    pub ten_minute_averages: PathBuf,
+}
+
+impl ArchivedDay {
+    fn file_exists(path: &Path) -> std::result::Result<bool, Box<dyn std::error::Error>> {
+        match fs::metadata(path) {
+            Ok(m) => {
+                if m.is_file() {
+                    Ok(true)
+                } else {
+                    Err(Box::new(UnexpectedObjectKind))
+                }
+            }
+            Err(e) => {
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    Ok(false)
+                } else {
+                    Err(Box::new(e))
+                }
+            }
+        }
+    }
+
+    pub fn exists(&self) -> std::result::Result<bool, Box<dyn std::error::Error>> {
+        Ok(ArchivedDay::file_exists(&self.all)?
+            || ArchivedDay::file_exists(&self.one_minute_averages)?
+            || ArchivedDay::file_exists(&self.ten_minute_averages)?)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,21 +129,20 @@ impl Config {
         cat_paths(&self.run_directory, "solar.log")
     }
 
-    fn archive_for_date_pfx(&self, date: chrono::Date<chrono::offset::Utc>, pfx: &str) -> PathBuf {
+    fn archive_for_date_pfx(&self, date: Date<Local>, pfx: &str) -> PathBuf {
         let d = date.format("%Y%m%d");
-        cat_paths(&self.archive_directory, format!("solar.log-{}{}.gz", d, pfx))
+        cat_paths(
+            &self.archive_directory,
+            format!("solar.log-{}{}.gz", d, pfx),
+        )
     }
 
-    pub fn archive_for_date(&self, date: chrono::Date<chrono::offset::Utc>) -> PathBuf {
-        self.archive_for_date_pfx(date, "")
-    }
-
-    pub fn archive_for_date_1m(&self, date: chrono::Date<chrono::offset::Utc>) -> PathBuf {
-        self.archive_for_date_pfx(date, "1m")
-    }
-
-    pub fn archive_for_date_10m(&self, date: chrono::Date<chrono::offset::Utc>) -> PathBuf {
-        self.archive_for_date_pfx(date, "10m")
+    pub fn archive_for_date(&self, date: Date<Local>) -> ArchivedDay {
+        ArchivedDay {
+            all: self.archive_for_date_pfx(date, ""),
+            one_minute_averages: self.archive_for_date_pfx(date, "1m"),
+            ten_minute_averages: self.archive_for_date_pfx(date, "10m"),
+        }
     }
 }
 
