@@ -77,9 +77,21 @@ impl Config {
         cat_paths(&self.run_directory, "solar.log")
     }
 
-    pub fn archive_for_date(&self, date: chrono::Date<chrono::offset::Utc>) -> PathBuf {
+    fn archive_for_date_pfx(&self, date: chrono::Date<chrono::offset::Utc>, pfx: &str) -> PathBuf {
         let d = date.format("%Y%m%d");
-        cat_paths(&self.archive_directory, format!("solar.log-{}.gz", d))
+        cat_paths(&self.archive_directory, format!("solar.log-{}{}.gz", d, pfx))
+    }
+
+    pub fn archive_for_date(&self, date: chrono::Date<chrono::offset::Utc>) -> PathBuf {
+        self.archive_for_date_pfx(date, "")
+    }
+
+    pub fn archive_for_date_1m(&self, date: chrono::Date<chrono::offset::Utc>) -> PathBuf {
+        self.archive_for_date_pfx(date, "1m")
+    }
+
+    pub fn archive_for_date_10m(&self, date: chrono::Date<chrono::offset::Utc>) -> PathBuf {
+        self.archive_for_date_pfx(date, "10m")
     }
 }
 

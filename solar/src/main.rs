@@ -22,7 +22,6 @@ mod modbus;
 mod rpi;
 mod archive;
 
-use chrono;
 use daemonize::Daemonize;
 use morningstar::error as mse;
 use morningstar::prostar_mppt as ps;
@@ -30,7 +29,6 @@ use solar_client::{self, Config, FromClient, Stats, ToClient};
 use std::{
     fs,
     io::{self, LineWriter, Write},
-    path::Path,
     sync::mpsc::{channel, Sender},
     thread,
     time::Duration,

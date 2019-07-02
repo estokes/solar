@@ -1,14 +1,15 @@
-use morningstar::error as mse;
-use morningstar::prostar_mppt as ps;
-use solar_client::{self, Config, FromClient, Stats, ToClient};
+use libflate::gzip::Encoder;
+use solar_client::{self, Config, FromClient, Stats};
 use std::{
-    fs,
-    io::{self, LineWriter, Write},
+    fs::{self, OpenOptions},
+    io,
+    iter::once,
     path::Path,
-    sync::mpsc::{channel, Sender},
-    thread,
     time::Duration,
 };
+
+const ONE_MINUTE: Duration = Duration::from_min(1.);
+const TEN_MINUTES: Duration = Duration::from_min(10.);
 
 macro_rules! avg {
     ($r0:ident, $r1:ident, $( $fld:ident ),*) => {
@@ -142,12 +143,47 @@ fn file_exists(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
     }
 }
 
+fn open_archive(path: &Path) -> Encoder {
+    Encoder::new(
+        OpenOptions::new()
+            .write(true)
+            .create(true)
+            .open(path)
+            .expect("failed to open archive file"),
+    )
+    .expect(format!("failed to create gzip encoder {}", path))
+}
+
+fn update_accum(
+    acc: Option<(DateTime<Utc>, Stats)>,
+    cutoff: Duration,
+    writer: &mut LineWriter<Encoder>,
+) -> Option<(DateTime<Utc>, Stats)> {
+    match acc {
+        None => Some((s.timestamp, s)),
+        Some((ts, mut acc)) => {
+            stats_accum(&mut acc, &s);
+            if acc.timestamp - ts < cutoff {
+                Some((ts, acc))
+            } else {
+                serde_json::to_writer(writer, acc).expect("failed to write stats");
+                write!(writer, "\n");
+                None
+            }
+        }
+    };
+}
+
 pub fn rotate_log(cfg: &Config) {
-    use libflate::gzip::Encoder;
-    use std::{fs::OpenOptions, iter::once};
-    let todays = cfg.archive_for_date(chrono::Utc::today());
-    if file_exists(&todays).expect("error checking file exists") {
-        println!("nothing to do");
+    let today = chrono::Utc::today();
+    let todays = cfg.archive_for_date(today);
+    let todays_1m = cfg.archive_for_date_1m(today);
+    let todays_10m = cfg.archive_for_date_10m(today);
+    if file_exists(&todays).expect("error checking file exists")
+        || file_exists(&todays_1m).expect("error checking file exists")
+        || file_exists(&todays_10m).expect("error checking file exists")
+    {
+        println!("one or more archive files already exist for today");
     } else {
         let current = cfg.log_file();
         let mut tmp = current.clone();
@@ -156,19 +192,18 @@ pub fn rotate_log(cfg: &Config) {
         fs::remove_file(&current).expect("failed to unlink current file");
         solar_client::send_command(&cfg, once(FromClient::LogRotated))
             .expect("failed to reopen log file");
-        let mut encoder = Encoder::new(
-            OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(&todays)
-                .expect("failed to open archive file"),
-        )
-        .expect("failed to create gzip encoder");
-        io::copy(
-            &mut fs::File::open(&tmp).expect("failed to open tmp file"),
-            &mut encoder,
-        )
-        .expect("failed to copy tmp file to the archive");
+        let mut todays_enc = io::LineWriter::new(open_archive(&todays));
+        let mut todays_1m_enc = io::LineWriter::new(open_archive(&todays_1m));
+        let mut todays_10m_enc = io::LineWriter::new(open_archive(&todays_10m));
+        let mut logs = io::BufReader::new(fs::File::open(&tmp).expect("failed to open tmp file"));
+        let mut acc_1m: Option<(DateTime<Utc>, Stats)> = None;
+        let mut acc_10m: Option<(DateTime<Utc>, Stats)> = None;
+        for line in logs.lines() {
+            let s = serde_json::from_str::<Stats>(&line).expect("malformed log file");
+            acc_1m = update_accum(acc_1m, ONE_MINUTE, &mut todays_1m_enc);
+            acc_10m = update_accum(acc_10m, TEN_MINUTES, &mut todays_10m_enc);
+            write!(&mut todays_enc, "{}\n", line).expect("failed to write line");
+        }
         fs::remove_file(&tmp).expect("failed to remove tmp file");
     }
 }
