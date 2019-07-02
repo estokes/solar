@@ -117,7 +117,7 @@ fn run_server(config: Config) {
                 }
             },
             ToMainLoop::Tick => {
-                let st = solar_client::Stats(log_fatal!(
+                let st = solar_client::Stats::V0(log_fatal!(
                     mb.read_stats(),
                     "fatal: failed to read stats {}",
                     break
@@ -157,44 +157,67 @@ macro_rules! avg {
 macro_rules! max {
     ($r0:ident, $r1:ident, $( $fld: ident ),*) => {
         $(
-            $r0.$fld = max($r0.fld, $r1.$fld);
+            $r0.$fld = max($r0.$fld, $r1.$fld);
+        )*
+    }
+}
+
+macro_rules! maxf {
+    ($r0:ident, $r1:ident, $( $fld: ident ),*) => {
+        $(
+            $r0.$fld = $r0.$fld.max($r1.$fld);
         )*
     }
 }
 
 fn stats_accum(acc: &mut Stats, s: &Stats) {
-    use std::cmp::{max, min};
-    acc.battery_v_min_daily = min(acc.battery_v_min_daily, s.battery_v_min_daily);
+    use std::cmp::max;
+    let acc = match acc {
+        Stats::V0(ref mut s) => s,
+    };
+    let s = match s {
+        Stats::V0(ref s) => s,
+    };
+    acc.battery_v_min_daily = acc.battery_v_min_daily.min(s.battery_v_min_daily);
+    acc.rts_temperature = match (acc.rts_temperature, s.rts_temperature) {
+        (None, None) => None,
+        (Some(t), None) => Some(t),
+        (None, Some(t)) => Some(t),
+        (Some(t0), Some(t1)) => Some(t0.max(t1)),
+    };
+    maxf!(
+        acc,
+        s,
+        heatsink_temperature,
+        battery_temperature,
+        ambient_temperature,
+        u_inductor_temperature,
+        v_inductor_temperature,
+        w_inductor_temperature,
+        ah_charge_resettable,
+        ah_charge_total,
+        kwh_charge_resettable,
+        kwh_charge_total,
+        ah_load_resettable,
+        ah_load_total,
+        battery_v_max_daily,
+        ah_charge_daily,
+        ah_load_daily,
+        array_voltage_max_daily,
+        hourmeter
+    );
     max!(
         acc,
         s,
         timestamp,
         software_version,
         battery_voltage_settings_multiplier,
-        heatsink_temperature,
-        battery_temperature,
-        ambient_temperature,
-        rts_temperature,
-        u_inductor_temperature,
-        v_inductor_temperature,
-        w_inductor_temperature,
         array_faults,
-        ah_charge_resettable,
-        ah_charge_total,
-        kwh_charge_resettable,
-        kwh_charge_total,
         load_faults,
-        ah_load_resettable,
-        ah_load_total,
-        hourmeter,
         alarms,
-        battery_v_max_daily,
-        ah_charge_daily,
-        ah_load_daily,
         array_faults_daily,
         load_faults_daily,
         alarms_daily,
-        array_voltage_max_daily,
         charge_state,
         load_state
     );
@@ -237,19 +260,19 @@ impl std::fmt::Display for UnexpectedObjectKind {
 }
 
 fn file_exists(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
-    match fs::metadata(&todays) {
+    match fs::metadata(path) {
         Ok(m) => {
             if m.is_file() {
                 Ok(true)
             } else {
-                Error(Box::new(UnexpectedObjectKind))
+                Err(Box::new(UnexpectedObjectKind))
             }
         }
-        Error(e) => {
-            if e.kind = std::io::ErrorKind::NotFound {
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
                 Ok(false)
             } else {
-                Error(Box::new(e))
+                Err(Box::new(e))
             }
         }
     }
@@ -257,7 +280,7 @@ fn file_exists(path: &Path) -> Result<bool, Box<dyn std::error::Error>> {
 
 fn rotate_log(cfg: &Config) {
     use libflate::gzip::Encoder;
-    use std::{fs::OpenOptions, io};
+    use std::{fs::OpenOptions, iter::once};
     let todays = cfg.archive_for_date(chrono::Utc::today());
     if file_exists(&todays).expect("error checking file exists") {
         println!("nothing to do");
@@ -267,15 +290,16 @@ fn rotate_log(cfg: &Config) {
         tmp.set_extension("tmp");
         fs::hard_link(&current, &tmp).expect("failed to create tmp file");
         fs::remove_file(&current).expect("failed to unlink current file");
-        solar_client::send_command(&config, once(FromClient::LogRotated))
+        solar_client::send_command(&cfg, once(FromClient::LogRotated))
             .expect("failed to reopen log file");
-        let encoder = Encoder::new(
+        let mut encoder = Encoder::new(
             OpenOptions::new()
                 .write(true)
                 .create(true)
                 .open(&todays)
                 .expect("failed to open archive file"),
-        );
+        )
+        .expect("failed to create gzip encoder");
         io::copy(
             &mut fs::File::open(&tmp).expect("failed to open tmp file"),
             &mut encoder,
@@ -394,7 +418,7 @@ fn main() {
             solar_client::send_command(&config, once(FromClient::ResetController))
                 .expect("failed to reset the controller")
         }
-        SubCommand::RotateLog => rotate_logs(&config),
+        SubCommand::RotateLog => rotate_log(&config),
         SubCommand::TailStats { json } => {
             for m in solar_client::send_query(&config, FromClient::TailStats)
                 .expect("failed to tail stats")

@@ -2,8 +2,7 @@ use actix::prelude::*;
 use actix_files;
 use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
-use morningstar::prostar_mppt::Stats;
-use solar_client::{load_config, send_query, FromClient, ToClient};
+use solar_client::{load_config, send_query, FromClient, ToClient, Stats};
 use std::{
     sync::{Arc, RwLock},
     thread,

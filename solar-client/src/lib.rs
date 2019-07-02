@@ -32,6 +32,14 @@ pub enum Stats {
     V0(ps::Stats),
 }
 
+impl std::fmt::Display for Stats {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+        match self {
+            Stats::V0(s) => s.fmt(fmt)
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToClient {
     Stats(Stats),
