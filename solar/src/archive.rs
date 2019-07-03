@@ -5,7 +5,7 @@ use std::{
     fs::{self, OpenOptions},
     io::{self, BufRead, LineWriter, Write},
     iter::once,
-    path::Path,
+    path::{Path, PathBuf},
 };
 use morningstar::prostar_mppt as ps;
 
@@ -167,28 +167,34 @@ fn do_archive_log_file(file: &Path, archive: &ArchivedDay) {
     }
 }
 
-pub fn archive_log_file(cfg: &Config, file: &Path, date: Date<Local>) {
-    let archive = cfg.archive_for_date(date);
-    if archive.exists().expect("failed to test archive") {
-        println!("one or more archive files already exist")
-    } else {
-        do_archive_log_file(file, &archive);
-    }
-}
-
-pub fn archive_todays_log(cfg: &Config) {
-    let archive = cfg.archive_for_date(Local::today());
+pub fn archive_log(cfg: &Config, file: Option<PathBuf>, date: Option<Date<Local>>) {
+    let archive = cfg.archive_for_date(date.unwrap_or_else(|| Local::today()));
+    let (file, is_current_log) = match file {
+        None => (cfg.log_file(), true),
+        Some(f) => {
+            let is_current_log = f == cfg.log_file();
+            (f, is_current_log)
+        }
+    };
     if archive.exists().expect("failed to test archive") {
         println!("one or more archive files already exist for today");
     } else {
-        let current = cfg.log_file();
-        let mut tmp = current.clone();
-        tmp.set_extension("tmp");
-        fs::hard_link(&current, &tmp).expect("failed to create tmp file");
-        fs::remove_file(&current).expect("failed to unlink current file");
-        solar_client::send_command(&cfg, once(FromClient::LogRotated))
-            .expect("failed to reopen log file");
-        do_archive_log_file(&tmp, &archive);
-        fs::remove_file(&tmp).expect("failed to remove tmp file");
+        let file = {
+            if is_current_log { file }
+            else {
+                let current = cfg.log_file();
+                let mut tmp = current.clone();
+                tmp.set_extension("tmp");
+                fs::hard_link(&current, &tmp).expect("failed to create tmp file");
+                fs::remove_file(&current).expect("failed to unlink current file");
+                solar_client::send_command(&cfg, once(FromClient::LogRotated))
+                    .expect("failed to reopen log file");
+                tmp
+            }
+        };
+        do_archive_log_file(&file, &archive);
+        if is_current_log {
+            fs::remove_file(&file).expect("failed to remove tmp file");
+        }
     }
 }

@@ -17,10 +17,10 @@ macro_rules! log_fatal {
     };
 }
 
+mod archive;
 mod control_socket;
 mod modbus;
 mod rpi;
-mod archive;
 
 use daemonize::Daemonize;
 use morningstar::error as mse;
@@ -164,8 +164,13 @@ enum SubCommand {
     EnableCharging,
     #[structopt(name = "cancel-float")]
     CancelFloat,
-    #[structopt(name = "rotate-log")]
-    RotateLog,
+    #[structopt(name = "archive-log")]
+    ArchiveLog {
+        #[structopt(short = "f", long = "file")]
+        file: Option<String>,
+        #[structopt(short = "d", long = "to-date")]
+        to_date: Option<String>,
+    },
     #[structopt(name = "reset-controller")]
     ResetController,
     #[structopt(name = "tail-stats")]
@@ -254,7 +259,18 @@ fn main() {
             solar_client::send_command(&config, once(FromClient::ResetController))
                 .expect("failed to reset the controller")
         }
-        SubCommand::RotateLog => archive::archive_todays_log(&config),
+        SubCommand::ArchiveLog { file, to_date } => {
+            let to_date = to_date.map(|d| {
+                use chrono::{naive::NaiveDate, offset::LocalResult, prelude::*};
+                let nd = NaiveDate::parse_from_str(&d, "%Y%m%d").expect("invalid date, %Y%m%d");
+                match Local.from_local_date(&nd) {
+                    LocalResult::Single(d) => d,
+                    LocalResult::None => panic!("invalid timezone conversion"),
+                    LocalResult::Ambiguous(_, _) => panic!("ambiguous timezone conversion"),
+                }
+            });
+            archive::archive_log(&config, file.map(|p| p.into()), to_date)
+        }
         SubCommand::TailStats { json } => {
             for m in solar_client::send_query(&config, FromClient::TailStats)
                 .expect("failed to tail stats")
