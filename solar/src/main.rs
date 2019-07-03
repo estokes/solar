@@ -166,7 +166,7 @@ enum SubCommand {
     CancelFloat,
     #[structopt(name = "archive-log")]
     ArchiveLog {
-        #[structopt(short = "f", long = "file")]
+        #[structopt(short = "f", long = "file", help = "file to read, - to read stdin")]
         file: Option<String>,
         #[structopt(short = "d", long = "to-date")]
         to_date: Option<String>,

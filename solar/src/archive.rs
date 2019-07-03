@@ -1,5 +1,5 @@
 use chrono::{prelude::*, Duration};
-use libflate::gzip::Encoder;
+use libflate::{gzip::{Encoder, EncodeOptions}, lz77::DefaultLz77Encoder};
 use morningstar::prostar_mppt as ps;
 use solar_client::{self, ArchivedDay, Config, FromClient, Stats};
 use std::{
@@ -114,12 +114,15 @@ fn stats_accum(acc: &mut Stats, s: &Stats) {
 
 fn open_archive(path: &Path) -> LineWriter<Encoder<fs::File>> {
     LineWriter::new(
-        Encoder::new(
+        Encoder::with_options(
             OpenOptions::new()
                 .write(true)
                 .create(true)
                 .open(path)
                 .expect("failed to open archive file"),
+            EncodeOptions::with_lz77(
+                DefaultLz77Encoder::with_window_size(65534)
+            )
         )
         .expect("failed to create gzip encoder {}"),
     )
@@ -165,7 +168,14 @@ fn do_archive_log_file(file: &Path, archive: &ArchivedDay) {
     let mut enc_10m = open_archive(&archive.ten_minute_averages);
     let mut acc_1m: Option<(DateTime<Local>, Stats)> = None;
     let mut acc_10m: Option<(DateTime<Local>, Stats)> = None;
-    for line in io::BufReader::new(fs::File::open(file).expect("open tmp")).lines() {
+    let fd : Box<dyn io::Read> = {
+        if file == Path::new("-") {
+            Box::new(io::stdin())
+        } else {
+            Box::new(fs::File::open(file).expect("open tmp"))
+        }
+    };
+    for line in io::BufReader::new(fd).lines() {
         let line = line.expect("error reading log file");
         let s = match serde_json::from_str::<Stats>(&line) {
             Ok(s) => s,
