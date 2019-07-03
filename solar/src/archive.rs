@@ -1,5 +1,6 @@
-use libflate::gzip::Encoder;
 use chrono::{prelude::*, Duration};
+use libflate::gzip::Encoder;
+use morningstar::prostar_mppt as ps;
 use solar_client::{self, ArchivedDay, Config, FromClient, Stats};
 use std::{
     fs::{self, OpenOptions},
@@ -7,7 +8,6 @@ use std::{
     iter::once,
     path::{Path, PathBuf},
 };
-use morningstar::prostar_mppt as ps;
 
 macro_rules! avg {
     ($r0:ident, $r1:ident, $( $fld:ident ),*) => {
@@ -146,6 +146,17 @@ fn update_accum(
     }
 }
 
+fn close_encoder(enc: LineWriter<Encoder<fs::File>>) {
+    match enc.into_inner() {
+        Ok(e) => {
+            e.finish()
+                .into_result()
+                .expect("failed to close gzip stream");
+        }
+        Err(_) => panic!("close encoder failed"),
+    }
+}
+
 fn do_archive_log_file(file: &Path, archive: &ArchivedDay) {
     let one_minute = Duration::seconds(60);
     let ten_minutes = Duration::seconds(600);
@@ -158,13 +169,16 @@ fn do_archive_log_file(file: &Path, archive: &ArchivedDay) {
         let line = line.expect("error reading log file");
         let s = match serde_json::from_str::<Stats>(&line) {
             Ok(s) => s,
-            Err(_) => Stats::V0(serde_json::from_str::<ps::Stats>(&line).expect("malformed log"))
+            Err(_) => Stats::V0(serde_json::from_str::<ps::Stats>(&line).expect("malformed log")),
         };
         acc_1m = update_accum(acc_1m, s, one_minute, &mut enc_1m);
         acc_10m = update_accum(acc_10m, s, ten_minutes, &mut enc_10m);
         serde_json::to_writer(enc.by_ref(), &s).expect("failed to encode");
         write!(&mut enc, "\n").expect("failed to write newline");
     }
+    close_encoder(enc);
+    close_encoder(enc_1m);
+    close_encoder(enc_10m);
 }
 
 pub fn archive_log(cfg: &Config, file: Option<PathBuf>, date: Option<Date<Local>>) {
@@ -180,8 +194,9 @@ pub fn archive_log(cfg: &Config, file: Option<PathBuf>, date: Option<Date<Local>
         println!("one or more archive files already exist for today");
     } else {
         let file = {
-            if is_current_log { file }
-            else {
+            if !is_current_log {
+                file
+            } else {
                 let current = cfg.log_file();
                 let mut tmp = current.clone();
                 tmp.set_extension("tmp");
