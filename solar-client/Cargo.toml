@@ -5,7 +5,7 @@ authors = ["Eric Stokes <letaris@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-morningstar = {path = "../../morningstar"}
+morningstar = "0.2"
 serde = "1.0"
 serde_json = "1.0"
 serde_derive = "1.0"

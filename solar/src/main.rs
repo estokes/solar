@@ -239,14 +239,16 @@ fn main() {
             ],
         )
         .expect("failed to enable load. Is the daemon running?"),
-        SubCommand::DisableCharging => {
-            solar_client::send_command(&config, once(FromClient::SetChargingEnabled(false)))
-                .expect("failed to disable charging. Is the daemon running?")
-        }
-        SubCommand::EnableCharging => {
-            solar_client::send_command(&config, once(FromClient::SetChargingEnabled(true)))
-                .expect("failed to enable charging. Is the daemon running?")
-        }
+        SubCommand::DisableCharging => solar_client::send_command(
+            &config,
+            once(FromClient::SetChargingEnabled(false)),
+        )
+        .expect("failed to disable charging. Is the daemon running?"),
+        SubCommand::EnableCharging => solar_client::send_command(
+            &config,
+            once(FromClient::SetChargingEnabled(true)),
+        )
+        .expect("failed to enable charging. Is the daemon running?"),
         SubCommand::CancelFloat => solar_client::send_command(
             &config,
             &[
@@ -262,11 +264,14 @@ fn main() {
         SubCommand::ArchiveLog { file, to_date } => {
             let to_date = to_date.map(|d| {
                 use chrono::{naive::NaiveDate, offset::LocalResult, prelude::*};
-                let nd = NaiveDate::parse_from_str(&d, "%Y%m%d").expect("invalid date, %Y%m%d");
+                let nd = NaiveDate::parse_from_str(&d, "%Y%m%d")
+                    .expect("invalid date, %Y%m%d");
                 match Local.from_local_date(&nd) {
                     LocalResult::Single(d) => d,
                     LocalResult::None => panic!("invalid timezone conversion"),
-                    LocalResult::Ambiguous(_, _) => panic!("ambiguous timezone conversion"),
+                    LocalResult::Ambiguous(_, _) => {
+                        panic!("ambiguous timezone conversion")
+                    }
                 }
             });
             archive::archive_log(&config, file.map(|p| p.into()), to_date)
@@ -295,9 +300,9 @@ fn main() {
                 .next()
             {
                 None => panic!("no response from server"),
-                Some(ToClient::Stats(_)) | Some(ToClient::Ok) | Some(ToClient::Err(_)) => {
-                    panic!("unexpected response")
-                }
+                Some(ToClient::Stats(_))
+                | Some(ToClient::Ok)
+                | Some(ToClient::Err(_)) => panic!("unexpected response"),
                 Some(ToClient::Settings(s)) => {
                     if json {
                         println!("{}", serde_json::to_string_pretty(&s).unwrap())
@@ -309,7 +314,8 @@ fn main() {
         }
         SubCommand::WriteSettings { file } => {
             let file = fs::File::open(&file).expect("failed to open settings");
-            let settings = serde_json::from_reader(&file).expect("failed to parse settings");
+            let settings =
+                serde_json::from_reader(&file).expect("failed to parse settings");
             solar_client::send_command(&config, once(FromClient::WriteSettings(settings)))
                 .expect("failed to write settings")
         }
