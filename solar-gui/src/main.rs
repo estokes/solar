@@ -1,15 +1,46 @@
+#[macro_use]
+extern crate serde_derive;
 use actix::prelude::*;
 use actix_files;
 use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
-use solar_client::{load_config, send_query, FromClient, ToClient, Stats};
+use solar_client::{load_config, send_query, FromClient, Stats, ToClient};
 use std::{
     sync::{Arc, RwLock},
     thread,
-    time::Duration,
 };
 
-static STATS_INTERVAL: Duration = Duration::from_secs(1);
+#[derive(Debug, Serialize, Deserialize)]
+enum Target {
+    Load,
+    Charging,
+    PhySolar,
+    PhyController,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum ToBrowser {
+    CmdOk,
+    CmdErr(String),
+    Stats(Stats),
+    Status(Target, bool),
+}
+
+impl ToBrowser {
+    fn enc(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|e| {
+            serde_json::to_string(&ToBrowser::CmdErr(e.to_string()))
+                .unwrap_or_else(|e| format!("json encoding is completely broken: {}", e))
+        })
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum FromBrowser {
+    StatsHistory { start: String, end: String },
+    StatsCurrent,
+    Set(Target, bool),
+}
 
 struct ControlSocket {
     stats: Arc<RwLock<Option<Stats>>>,
@@ -17,16 +48,6 @@ struct ControlSocket {
 
 impl Actor for ControlSocket {
     type Context = ws::WebsocketContext<Self>;
-
-    fn started(&mut self, ctx: &mut Self::Context) {
-        let stats = self.stats.clone();
-        ctx.run_interval(STATS_INTERVAL, move |_act, ctx| {
-            match *stats.read().unwrap() {
-                None => (),
-                Some(ref s) => ctx.text(serde_json::to_string(s).unwrap_or(String::new())),
-            }
-        });
-    }
 }
 
 impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
@@ -34,10 +55,22 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
         match msg {
             ws::Message::Ping(m) => ctx.pong(&m),
             ws::Message::Close(_) => ctx.stop(),
-            ws::Message::Pong(_)
-            | ws::Message::Text(_)
-            | ws::Message::Binary(_)
-            | ws::Message::Nop => (),
+            ws::Message::Pong(_) | ws::Message::Binary(_) | ws::Message::Nop => (),
+            ws::Message::Text(m) => match serde_json::from_str::<FromBrowser>(&m) {
+                Err(e) => ctx.text(
+                    ToBrowser::CmdErr(format!("invalid command: {},  {}", m, e.to_string()))
+                        .enc(),
+                ),
+                Ok(cmd) => match cmd {
+                    FromBrowser::StatsCurrent => match *self.stats.read().unwrap() {
+                        None => ctx.text(ToBrowser::CmdErr("not available".into()).enc()),
+                        Some(s) => ctx.text(ToBrowser::Stats(s).enc()),
+                    },
+                    FromBrowser::StatsHistory { .. } | FromBrowser::Set(_, _) => {
+                        ctx.text(ToBrowser::CmdErr("not implemented".into()).enc())
+                    }
+                },
+            },
         }
     }
 }
