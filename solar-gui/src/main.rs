@@ -13,7 +13,7 @@ use std::{
     error,
     ffi::OsStr,
     fs,
-    io::{self, Read, BufRead},
+    io::{self, BufRead, Read},
     iter::{self, Iterator},
     path::PathBuf,
     sync::{Arc, RwLock},
@@ -41,17 +41,15 @@ fn read_history_file(
     let mut buf = io::BufReader::new(reader);
     let mut sbuf = String::new();
     Ok(iter::from_fn(move || {
-        match serde_json::from_reader(buf.by_ref()) {
+        match buf.by_ref().read_line(&mut sbuf) {
+            Ok(_) => (),
+            Err(_) => return None,
+        }
+        match serde_json::from_str(&sbuf) {
             Ok(o) => {
-                match buf.by_ref().read_line(&mut sbuf) {
-                    Ok(l) if l > 0 => {
-                        error!("trailing unparsed characters before newline '{}'", sbuf);
-                        sbuf.clear()
-                    },
-                    Ok(_) | Err(_) => ()
-                }
+                sbuf.clear();
                 Some(o)
-            },
+            }
             Err(e) => {
                 match e.classify() {
                     Category::Io | Category::Eof => (),
@@ -90,15 +88,13 @@ fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> + '_
             })
         }
     })
-    .chain(
-        match read_history_file(cfg.log_file()) {
-            Ok(i) => Some(i),
-            Err(e) => {
-                error!("error opening todays log file, skipping: {}", e);
-                None
-            }
+    .chain(match read_history_file(cfg.log_file()) {
+        Ok(i) => Some(i),
+        Err(e) => {
+            error!("error opening todays log file, skipping: {}", e);
+            None
         }
-    )
+    })
     .flatten()
 }
 
