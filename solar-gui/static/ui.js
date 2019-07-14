@@ -23,14 +23,31 @@ function display_stats(stats) {
     }
 }
 
+function draw_hist_current(history) {
+    return new Chart($('#current_chart'), {
+	type: 'line',
+	data: history.map(x => {
+	    x: new Date(x.V0.timestamp),
+	    y: x.V0.charge_current
+	}),
+    })
+}
+
 function loop() {
+    var receiving_history = false;
+    var history = [];
     var con = new WebSocket('ws://' + window.location.host + '/ws/');
     var iid = 0;
+    var current_chart;
 
     $('#status').text('Connecting');
     con.onopen = function() {
 	$('#status').text('Connected ' + con.protocol);
-	iid = window.setInterval(function() { con.send('"StatsCurrent"') }, 5000);
+	receiving_history = true;
+	con.send("\"{'StatsHistory': 3}\"");
+	iid = window.setInterval(function() {
+	    if(!history_requested) con.send('"StatsCurrent"');
+	}, 5000);
     };
     con.onmessage = function(e) {
 	var v = JSON.parse(e.data);
@@ -38,9 +55,13 @@ function loop() {
 	else if (v.hasOwnProperty('CmdErr')) {
 	    console.log(v);
 	} else if (v.hasOwnProperty('Stats')) {
+	    history.push(v.Stats);
 	    display_stats(v.Stats);
 	} else if (v.hasOwnProperty('Status')) {
 	    console.log(v);
+	} else if (v.hasOwnProperty('EndOfHistory')) {
+	    receiving_history = false;
+	    current_chart = draw_hist_current(history);
 	} else {
 	    console.log("unknown response from server: " + v);
 	}
