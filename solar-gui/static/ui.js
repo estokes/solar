@@ -26,11 +26,13 @@ function display_stats(stats) {
 function draw_hist_current(history) {
     return new Chart($('#current_chart'), {
 	type: 'line',
-	data: history.map(x => {
-	    x: new Date(x.V0.timestamp),
-	    y: x.V0.charge_current
+	data: history.map(v => {
+	    return {
+		x: new Date(v.V0.timestamp),
+		y: v.V0.charge_current
+	    };
 	}),
-    })
+    });
 }
 
 function loop() {
@@ -44,10 +46,8 @@ function loop() {
     con.onopen = function() {
 	$('#status').text('Connected ' + con.protocol);
 	receiving_history = true;
-	con.send("\"{'StatsHistory': 3}\"");
-	iid = window.setInterval(function() {
-	    if(!history_requested) con.send('"StatsCurrent"');
-	}, 5000);
+	con.send('{"StatsHistory": 3}');
+	iid = window.setInterval(() => { if(!receiving_history) con.send('"StatsCurrent"'); }, 5000);
     };
     con.onmessage = function(e) {
 	var v = JSON.parse(e.data);

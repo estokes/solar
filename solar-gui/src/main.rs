@@ -42,23 +42,20 @@ fn read_history_file(
     Ok(iter::from_fn(move || {
         match serde_json::from_reader(buf.by_ref()) {
             Ok(o) => Some(o),
-            Err(e) => match e.classify() {
-                Category::Io | Category::Eof => None,
-                Category::Syntax => {
-                    error!(
+            Err(e) => {
+                match e.classify() {
+                    Category::Io | Category::Eof => (),
+                    Category::Syntax => error!(
                         "syntax error in log archive, parsing terminated: {:?}, {}",
                         file, e
-                    );
-                    None
-                }
-                Category::Data => {
-                    error!(
+                    ),
+                    Category::Data => error!(
                         "semantic error in log archive, parsing terminated: {:?}, {}",
                         file, e
-                    );
-                    None
-                }
-            },
+                    ),
+                };
+                None
+            }
         }
     }))
 }
@@ -83,7 +80,7 @@ fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> + '_
             })
         }
     })
-    .chain(iter::from_fn(move || {
+    .chain(
         match read_history_file(cfg.log_file()) {
             Ok(i) => Some(i),
             Err(e) => {
@@ -91,7 +88,7 @@ fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> + '_
                 None
             }
         }
-    }))
+    )
     .flatten()
 }
 
@@ -136,6 +133,7 @@ impl Actor for ControlSocket {
 
 impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
     fn handle(&mut self, msg: ws::Message, ctx: &mut Self::Context) {
+        info!("handle websocket message: {:?}", msg);
         match msg {
             ws::Message::Ping(m) => ctx.pong(&m),
             ws::Message::Close(_) => ctx.stop(),
@@ -155,7 +153,9 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
                         Some(s) => ctx.text(ToBrowser::Stats(s).enc()),
                     },
                     FromBrowser::StatsHistory(days) => {
+                        info!("fetching current stats going back {}", days);
                         for s in read_history(&self.0.config, days) {
+                            info!("read object: {}", s);
                             ctx.text(ToBrowser::Stats(s).enc())
                         }
                         ctx.text(ToBrowser::EndOfHistory.enc())
@@ -188,8 +188,9 @@ fn read_stats(appdata: AppData) {
 }
 
 fn main() -> std::io::Result<()> {
-    std::env::set_var("RUST_LOG", "actix_web=info");
+    std::env::set_var("RUST_LOG", "info");
     env_logger::init();
+    info!("starting server");
     HttpServer::new(|| {
         let appdata = AppData {
             stats: Arc::new(RwLock::new(None)),
