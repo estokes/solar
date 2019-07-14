@@ -13,7 +13,7 @@ use std::{
     error,
     ffi::OsStr,
     fs,
-    io::{self, Read},
+    io::{self, Read, BufRead},
     iter::{self, Iterator},
     path::PathBuf,
     sync::{Arc, RwLock},
@@ -39,9 +39,19 @@ fn read_history_file(
         }
     };
     let mut buf = io::BufReader::new(reader);
+    let mut sbuf = String::new();
     Ok(iter::from_fn(move || {
         match serde_json::from_reader(buf.by_ref()) {
-            Ok(o) => Some(o),
+            Ok(o) => {
+                match buf.by_ref().read_line(&mut sbuf) {
+                    Ok(l) if l > 0 => {
+                        error!("trailing unparsed characters before newline '{}'", sbuf);
+                        sbuf.clear()
+                    },
+                    Ok(_) | Err(_) => ()
+                }
+                Some(o)
+            },
             Err(e) => {
                 match e.classify() {
                     Category::Io | Category::Eof => (),
