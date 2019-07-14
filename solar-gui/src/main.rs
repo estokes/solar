@@ -161,10 +161,10 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
                     FromBrowser::StatsHistory(days) => {
                         info!("fetching current stats going back {}", days);
                         for s in read_history(&self.0.config, days) {
-                            info!("read object: {}", s);
                             ctx.text(ToBrowser::Stats(s).enc())
                         }
-                        ctx.text(ToBrowser::EndOfHistory.enc())
+                        ctx.text(ToBrowser::EndOfHistory.enc());
+                        info!("done fetching stats");
                     }
                     FromBrowser::Set(_, _) => {
                         ctx.text(ToBrowser::CmdErr("not implemented".into()).enc())
