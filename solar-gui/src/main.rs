@@ -10,9 +10,12 @@ use chrono::{prelude::*, Duration};
 use libflate::gzip;
 use solar_client::{load_config, send_query, Config, FromClient, Stats, ToClient};
 use std::{
-    error, fs, io,
+    error,
+    ffi::OsStr,
+    fs,
+    io::{self, Read},
     iter::{self, Iterator},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, RwLock},
     thread,
 };
@@ -24,35 +27,43 @@ struct AppData {
 }
 
 fn read_history_file(
-    file: &Path,
+    file: PathBuf,
 ) -> Result<impl Iterator<Item = Stats>, Box<dyn error::Error>> {
     use serde_json::error::Category;
     let reader: Box<dyn io::Read> = {
-        let mut f = fs::File::open(file)?;
-        if file.extension != "gz" {
-            f.into()
+        let f = fs::File::open(&file)?;
+        if file.extension() != Some(OsStr::new("gz")) {
+            Box::new(f)
         } else {
-            gzip::Decoder::new(f)?.into()
+            Box::new(gzip::Decoder::new(f)?)
         }
     };
-    let buf = io::BufReader::new(reader);
-    Ok(iter::from_fn(move || match serde_json::from_reader(&buf) {
-        Ok(o) => Some(o),
-        Err(e) => match e.classify() {
-            Category::Io | Category::Eof => None,
-            Category::Syntax => {
-                error!("syntax error in log archive, parsing terminated: {}", e);
-                None
-            }
-            Category::Data => {
-                error!("semantic error in log archive, parsing terminated: {}", e);
-                None
-            }
-        },
+    let mut buf = io::BufReader::new(reader);
+    Ok(iter::from_fn(move || {
+        match serde_json::from_reader(buf.by_ref()) {
+            Ok(o) => Some(o),
+            Err(e) => match e.classify() {
+                Category::Io | Category::Eof => None,
+                Category::Syntax => {
+                    error!(
+                        "syntax error in log archive, parsing terminated: {:?}, {}",
+                        file, e
+                    );
+                    None
+                }
+                Category::Data => {
+                    error!(
+                        "semantic error in log archive, parsing terminated: {:?}, {}",
+                        file, e
+                    );
+                    None
+                }
+            },
+        }
     }))
 }
 
-fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> {
+fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> + '_ {
     let today = Local::today();
     iter::from_fn(move || {
         if days <= 0 {
@@ -62,27 +73,26 @@ fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> {
             days -= 1;
             let file = today
                 .checked_sub_signed(d)
-                .map(|d| &cfg.archive_for_date(d).one_minute_averages);
-            file.and_then(|f| match read_history_file(&f) {
+                .map(|d| cfg.archive_for_date(d).one_minute_averages);
+            file.and_then(|f| match read_history_file(f) {
                 Ok(i) => Some(i),
                 Err(e) => {
-                    error!("error opening log archive, skipping: {}, {}", f, e);
+                    error!("error opening log archive, skipping: {}", e);
                     None
                 }
             })
         }
     })
-    .flatten()
-    .chain(
-        match read_history_file(&cfg.log_file()) {
+    .chain(iter::from_fn(move || {
+        match read_history_file(cfg.log_file()) {
             Ok(i) => Some(i),
             Err(e) => {
                 error!("error opening todays log file, skipping: {}", e);
                 None
             }
         }
-        .flatten(),
-    )
+    }))
+    .flatten()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
