@@ -56,10 +56,10 @@ function loop() {
 	    console.log(v);
 	} else if (v.hasOwnProperty('Stats')) {
 	    history.push(v.Stats);
-	    display_stats(v.Stats);
+	    if(!receiving_history) display_stats(v.Stats);
 	} else if (v.hasOwnProperty('Status')) {
 	    console.log(v);
-	} else if (v.hasOwnProperty('EndOfHistory')) {
+	} else if (v == 'EndOfHistory') {
 	    receiving_history = false;
 	    current_chart = draw_hist_current(history);
 	} else {
@@ -68,11 +68,13 @@ function loop() {
     };
     con.onclose = function() {
 	$('#status').text("Not Connected");
+	console.log("connection was closed");
 	window.clearInterval(iid);
 	loop();
     };
     con.onerror = function(e) {
 	$('#status').text("Disconnected " + e);
+	console.log("connection was closed " + e);
 	window.clearInterval(iid);
 	loop();
     };
