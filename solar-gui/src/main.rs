@@ -1,14 +1,17 @@
 #[macro_use]
 extern crate serde_derive;
-use chrono::prelude::*;
+#[macro_use]
+extern crate log;
 use actix::prelude::*;
 use actix_files;
 use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
+use chrono::{prelude::*, Duration};
 use libflate::gzip;
-use solar_client::{load_config, send_query, FromClient, Stats, ToClient, Config};
+use solar_client::{load_config, send_query, Config, FromClient, Stats, ToClient};
 use std::{
     error, fs, io,
+    iter::{self, Iterator},
     path::{Path, PathBuf},
     sync::{Arc, RwLock},
     thread,
@@ -20,9 +23,11 @@ struct AppData {
     config: Config,
 }
 
-fn read_history_file(file: &Path, v: &mut Vec<Stats>) -> Result<(), Box<dyn error::Error>> {
+fn read_history_file(
+    file: &Path,
+) -> Result<impl Iterator<Item = Stats>, Box<dyn error::Error>> {
     use serde_json::error::Category;
-    let reader: Box<dyn io::Reader> = {
+    let reader: Box<dyn io::Read> = {
         let mut f = fs::File::open(file)?;
         if file.extension != "gz" {
             f.into()
@@ -31,28 +36,53 @@ fn read_history_file(file: &Path, v: &mut Vec<Stats>) -> Result<(), Box<dyn erro
         }
     };
     let buf = io::BufReader::new(reader);
-    loop {
-        match serde_json::from_reader::<Stats>(&buf) {
-            Ok(o) => v.push(o),
-            Err(e) => match e.classify() {
-                Category::Io | Category::Eof => return Ok(()),
-                Category::Syntax | Category::Data => return Err(e).into()
+    Ok(iter::from_fn(move || match serde_json::from_reader(&buf) {
+        Ok(o) => Some(o),
+        Err(e) => match e.classify() {
+            Category::Io | Category::Eof => None,
+            Category::Syntax => {
+                error!("syntax error in log archive, parsing terminated: {}", e);
+                None
             }
-        }
-    }
+            Category::Data => {
+                error!("semantic error in log archive, parsing terminated: {}", e);
+                None
+            }
+        },
+    }))
 }
 
-fn read_history(cfg: &Config, mut days: i64) -> Result<Vec<Stats>, Box<dyn error::Error>> {
-    let mut v = Vec::new();
+fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> {
     let today = Local::today();
-    while days > 0 {
-        for date in today.checked_sub_signed(Duration::days(days)).iter() {
-            read_history_file(&cfg.archive_for_date(date).one_minute_averages, &mut v)?
+    iter::from_fn(move || {
+        if days <= 0 {
+            None
+        } else {
+            let d = Duration::days(days);
+            days -= 1;
+            let file = today
+                .checked_sub_signed(d)
+                .map(|d| &cfg.archive_for_date(d).one_minute_averages);
+            file.and_then(|f| match read_history_file(&f) {
+                Ok(i) => Some(i),
+                Err(e) => {
+                    error!("error opening log archive, skipping: {}, {}", f, e);
+                    None
+                }
+            })
         }
-        days -= 1;
-    }
-    read_history_file(&cfg.log_file(), &mut v)?;
-    Ok(v)
+    })
+    .flatten()
+    .chain(
+        match read_history_file(&cfg.log_file()) {
+            Ok(i) => Some(i),
+            Err(e) => {
+                error!("error opening todays log file, skipping: {}", e);
+                None
+            }
+        }
+        .flatten(),
+    )
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -115,15 +145,10 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
                         Some(s) => ctx.text(ToBrowser::Stats(s).enc()),
                     },
                     FromBrowser::StatsHistory(days) => {
-                        match read_history(&self.appdata, days) {
-                            Err(e) => ctx.text(ToBrowser::CmdErr(e.to_string()).enc()),
-                            Ok(history) => {
-                                for o in history {
-                                    ctx.text(ToBrowser::Stats(o).enc())
-                                }
-                                ctx.text(ToBrowser::EndOfHistory.enc())
-                            }
+                        for s in read_history(&self.0.config, days) {
+                            ctx.text(ToBrowser::Stats(s).enc())
                         }
+                        ctx.text(ToBrowser::EndOfHistory.enc())
                     }
                     FromBrowser::Set(_, _) => {
                         ctx.text(ToBrowser::CmdErr("not implemented".into()).enc())
@@ -137,10 +162,11 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
 fn control_socket(r: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
     let d = r.app_data::<AppData>().unwrap();
     ws::start(ControlSocket(d.clone()), &r, stream)
-p}
+}
 
 fn read_stats(appdata: AppData) {
-    let iter = send_query(&appdata.config, FromClient::TailStats).expect("failed to tail stats");
+    let iter =
+        send_query(&appdata.config, FromClient::TailStats).expect("failed to tail stats");
     thread::spawn(move || {
         for s in iter {
             match s {
@@ -155,7 +181,10 @@ fn main() -> std::io::Result<()> {
     std::env::set_var("RUST_LOG", "actix_web=info");
     env_logger::init();
     HttpServer::new(|| {
-        let appdata = AppData { stats: Arc::new(RwLock::new(None)), config: load_config(None) };
+        let appdata = AppData {
+            stats: Arc::new(RwLock::new(None)),
+            config: load_config(None),
+        };
         read_stats(appdata.clone());
         App::new()
             .data(appdata)
