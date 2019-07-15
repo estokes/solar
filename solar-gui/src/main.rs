@@ -78,7 +78,7 @@ fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> + '_
             days -= 1;
             let file = today
                 .checked_sub_signed(d)
-                .map(|d| cfg.archive_for_date(d).one_minute_averages);
+                .map(|d| cfg.archive_for_date(d).ten_minute_averages);
             file.and_then(|f| match read_history_file(f.clone()) {
                 Ok(i) => Some(i),
                 Err(e) => {
