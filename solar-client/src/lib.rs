@@ -1,4 +1,6 @@
 #[macro_use]
+extern crate log;
+#[macro_use]
 extern crate serde_derive;
 #[macro_use]
 extern crate error_chain;
@@ -14,6 +16,8 @@ use std::{
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
 };
+
+pub mod archive;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum FromClient {

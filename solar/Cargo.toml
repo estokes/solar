@@ -19,4 +19,3 @@ solar-client = {path = "../solar-client"}
 structopt = "0.2"
 syslog = "4.0"
 chrono = "0.4"
-libflate = "0.1"

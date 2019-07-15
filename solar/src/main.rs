@@ -17,7 +17,6 @@ macro_rules! log_fatal {
     };
 }
 
-mod archive;
 mod control_socket;
 mod modbus;
 mod rpi;
@@ -25,7 +24,7 @@ mod rpi;
 use daemonize::Daemonize;
 use morningstar::error as mse;
 use morningstar::prostar_mppt as ps;
-use solar_client::{self, Config, FromClient, Stats, ToClient};
+use solar_client::{self, archive, Config, FromClient, Stats, ToClient};
 use std::{
     fs,
     io::{self, LineWriter, Write},

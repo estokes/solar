@@ -8,7 +8,9 @@ use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServ
 use actix_web_actors::ws;
 use chrono::{prelude::*, Duration};
 use libflate::gzip;
-use solar_client::{load_config, send_query, Config, FromClient, Stats, ToClient};
+use solar_client::{
+    archive, load_config, send_query, Config, FromClient, Stats, ToClient,
+};
 use std::{
     error,
     ffi::OsStr,
@@ -20,82 +22,18 @@ use std::{
     thread,
 };
 
+#[derive(Copy, Clone)]
+struct StatContainer {
+    current: Stats,
+    decimated: Stats,
+    decimated_acc: Stats,
+    decimated_ts: DateTime<Local>,
+}
+
 #[derive(Clone)]
 struct AppData {
-    stats: Arc<RwLock<Option<Stats>>>,
+    stats: Arc<RwLock<Option<StatContainer>>>,
     config: Config,
-}
-
-fn read_history_file(
-    file: PathBuf,
-) -> Result<impl Iterator<Item = Stats>, Box<dyn error::Error>> {
-    use serde_json::error::Category;
-    let reader: Box<dyn io::Read> = {
-        let f = fs::File::open(&file)?;
-        if file.extension() != Some(OsStr::new("gz")) {
-            Box::new(f)
-        } else {
-            Box::new(gzip::Decoder::new(f)?)
-        }
-    };
-    let mut buf = io::BufReader::new(reader);
-    let mut sbuf = String::new();
-    Ok(iter::from_fn(move || {
-        match buf.by_ref().read_line(&mut sbuf) {
-            Ok(_) => (),
-            Err(_) => return None,
-        }
-        match serde_json::from_str(&sbuf) {
-            Ok(o) => {
-                sbuf.clear();
-                Some(o)
-            }
-            Err(e) => {
-                match e.classify() {
-                    Category::Io | Category::Eof => (),
-                    Category::Syntax => error!(
-                        "syntax error in log archive, parsing terminated: {:?}, {}",
-                        file, e
-                    ),
-                    Category::Data => error!(
-                        "semantic error in log archive, parsing terminated: {:?}, {}",
-                        file, e
-                    ),
-                };
-                None
-            }
-        }
-    }))
-}
-
-fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> + '_ {
-    let today = Local::today();
-    iter::from_fn(move || {
-        if days <= 0 {
-            None
-        } else {
-            let d = Duration::days(days);
-            days -= 1;
-            let file = today
-                .checked_sub_signed(d)
-                .map(|d| cfg.archive_for_date(d).ten_minute_averages);
-            file.and_then(|f| match read_history_file(f.clone()) {
-                Ok(i) => Some(i),
-                Err(e) => {
-                    error!("error opening log archive, skipping: {:?}, {}", f, e);
-                    None
-                }
-            })
-        }
-    })
-    .chain(match read_history_file(cfg.log_file()) {
-        Ok(i) => Some(i),
-        Err(e) => {
-            error!("error opening todays log file, skipping: {}", e);
-            None
-        }
-    })
-    .flatten()
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -111,6 +49,7 @@ enum ToBrowser {
     CmdOk,
     CmdErr(String),
     Stats(Stats),
+    StatsDecimated(Stats),
     Status(Target, bool),
     EndOfHistory,
 }
@@ -128,6 +67,7 @@ impl ToBrowser {
 enum FromBrowser {
     StatsHistory(i64),
     StatsCurrent,
+    StatsDecimated,
     Set(Target, bool),
 }
 
@@ -156,7 +96,11 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
                 Ok(cmd) => match cmd {
                     FromBrowser::StatsCurrent => match *self.0.stats.read().unwrap() {
                         None => ctx.text(ToBrowser::CmdErr("not available".into()).enc()),
-                        Some(s) => ctx.text(ToBrowser::Stats(s).enc()),
+                        Some(c) => ctx.text(ToBrowser::Stats(c.current).enc()),
+                    }
+                    FromBrowser::StatsDecimated => match *self.0.stats.read().unwrap() {
+                        None => ctx.text(ToBrowser::CmdErr("not available".into()).enc()),
+                        Some(c) => ctx.text(ToBrowser::StatsDecimated(c.decimated).enc()),
                     },
                     FromBrowser::StatsHistory(days) => {
                         info!("fetching current stats going back {}", days);
@@ -181,13 +125,35 @@ fn control_socket(r: HttpRequest, stream: web::Payload) -> Result<HttpResponse, 
 }
 
 fn read_stats(appdata: AppData) {
+    let ten_minutes = Duration::seconds(600);
     let iter =
         send_query(&appdata.config, FromClient::TailStats).expect("failed to tail stats");
     thread::spawn(move || {
         for s in iter {
             match s {
-                ToClient::Stats(s) => *appdata.stats.write().unwrap() = Some(s),
                 ToClient::Settings(_) | ToClient::Ok | ToClient::Err(_) => (),
+                ToClient::Stats(s) => {
+                    let sc = appdata.stats.write().unwrap();
+                    *sc = match *sc {
+                        None => Some(StatContainer {
+                            current: s,
+                            decimated: s,
+                            decimated_acc: s,
+                            decimated_ts: s.timestamp,
+                        }),
+                        Some(mut c) => {
+                            c.current = s;
+                            if c.decimated_acc.timestamp - c.decimated_ts < ten_minutes {
+                                archive::stats_accum(&mut c.decimated_acc, &s);
+                            } else {
+                                c.decimated = c.decimated_acc;
+                                c.decimated_acc = s;
+                                c.decimated_ts = s.timestamp;
+                            }
+                            Some(c)
+                        }
+                    }
+                }
             }
         }
     });

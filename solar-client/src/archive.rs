@@ -1,11 +1,16 @@
+use crate::{ArchivedDay, Config, FromClient, Stats, send_command};
 use chrono::{prelude::*, Duration};
-use libflate::{gzip::{Encoder, EncodeOptions}, lz77::DefaultLz77Encoder};
+use libflate::{
+    gzip::{EncodeOptions, Encoder, Decoder},
+    lz77::DefaultLz77Encoder,
+};
 use morningstar::prostar_mppt as ps;
-use solar_client::{self, ArchivedDay, Config, FromClient, Stats};
 use std::{
+    error,
+    ffi::OsStr,
     fs::{self, OpenOptions},
-    io::{self, BufRead, LineWriter, Write},
-    iter::once,
+    io::{self, BufRead, LineWriter, Read, Write},
+    iter::{self, Iterator},
     path::{Path, PathBuf},
 };
 
@@ -33,7 +38,7 @@ macro_rules! maxf {
     }
 }
 
-fn stats_accum(acc: &mut Stats, s: &Stats) {
+pub fn stats_accum(acc: &mut Stats, s: &Stats) {
     use std::cmp::max;
     let acc = match acc {
         Stats::V0(ref mut s) => s,
@@ -112,6 +117,54 @@ fn stats_accum(acc: &mut Stats, s: &Stats) {
     );
 }
 
+pub struct Decimate<I>
+where
+    I: Iterator<Item = Stats>,
+{
+    acc: Option<(DateTime<Local>, Stats)>,
+    cutoff: Duration,
+    iter: I,
+}
+
+impl<I> Iterator for Decimate<I>
+where
+    I: Iterator<Item = Stats>,
+{
+    type Item = Stats;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            match self.iter.next() {
+                None => return self.acc.take().map(|(_, s)| s),
+                Some(st) => {
+                    self.acc = match self.acc {
+                        None => Some((st.timestamp(), st)),
+                        Some((ts, mut acc)) => {
+                            stats_accum(&mut acc, &st);
+                            Some((ts, acc))
+                        }
+                    };
+                    let (ts, acc) = self.acc.unwrap();
+                    if acc.timestamp() - ts >= self.cutoff {
+                        return Some(acc);
+                    }
+                }
+            }
+        }
+    }
+}
+
+pub fn decimate<I>(cutoff: Duration, iter: I) -> Decimate<I>
+where
+    I: Iterator<Item = Stats>,
+{
+    Decimate {
+        cutoff,
+        iter,
+        acc: None,
+    }
+}
+
 fn open_archive(path: &Path) -> LineWriter<Encoder<fs::File>> {
     LineWriter::new(
         Encoder::with_options(
@@ -120,9 +173,7 @@ fn open_archive(path: &Path) -> LineWriter<Encoder<fs::File>> {
                 .create(true)
                 .open(path)
                 .expect("failed to open archive file"),
-            EncodeOptions::with_lz77(
-                DefaultLz77Encoder::with_window_size(65534)
-            )
+            EncodeOptions::with_lz77(DefaultLz77Encoder::with_window_size(65534)),
         )
         .expect("failed to create gzip encoder {}"),
     )
@@ -141,7 +192,8 @@ fn update_accum(
             if acc.timestamp() - ts < cutoff {
                 Some((ts, acc))
             } else {
-                serde_json::to_writer(writer.by_ref(), &acc).expect("failed to write stats");
+                serde_json::to_writer(writer.by_ref(), &acc)
+                    .expect("failed to write stats");
                 write!(writer, "\n").expect("failed to write newline");
                 None
             }
@@ -160,7 +212,51 @@ fn close_encoder(enc: LineWriter<Encoder<fs::File>>) {
     }
 }
 
-fn do_archive_log_file(file: &Path, archive: &ArchivedDay) {
+fn read_history_file(
+    file: PathBuf,
+) -> Result<impl Iterator<Item = Stats>, Box<dyn error::Error>> {
+    use serde_json::error::Category;
+    let reader: Box<dyn io::Read> = {
+        let f = fs::File::open(&file)?;
+        if &file == Path::new("-") {
+            Box::new(io::stdin())
+        } else if file.extension() != Some(OsStr::new("gz")) {
+            Box::new(f)
+        } else {
+            Box::new(Decoder::new(f)?)
+        }
+    };
+    let mut buf = io::BufReader::new(reader);
+    let mut sbuf = String::new();
+    Ok(iter::from_fn(move || {
+        match buf.by_ref().read_line(&mut sbuf) {
+            Ok(_) => (),
+            Err(_) => return None,
+        }
+        match serde_json::from_str(&sbuf) {
+            Ok(o) => {
+                sbuf.clear();
+                Some(o)
+            }
+            Err(e) => {
+                match e.classify() {
+                    Category::Io | Category::Eof => (),
+                    Category::Syntax => error!(
+                        "syntax error in log archive, parsing terminated: {:?}, {}",
+                        file, e
+                    ),
+                    Category::Data => error!(
+                        "semantic error in log archive, parsing terminated: {:?}, {}",
+                        file, e
+                    ),
+                };
+                None
+            }
+        }
+    }))
+}
+
+fn do_archive_log_file(file: PathBuf, archive: &ArchivedDay) {
     let one_minute = Duration::seconds(60);
     let ten_minutes = Duration::seconds(600);
     let mut enc = open_archive(&archive.all);
@@ -168,19 +264,7 @@ fn do_archive_log_file(file: &Path, archive: &ArchivedDay) {
     let mut enc_10m = open_archive(&archive.ten_minute_averages);
     let mut acc_1m: Option<(DateTime<Local>, Stats)> = None;
     let mut acc_10m: Option<(DateTime<Local>, Stats)> = None;
-    let fd : Box<dyn io::Read> = {
-        if file == Path::new("-") {
-            Box::new(io::stdin())
-        } else {
-            Box::new(fs::File::open(file).expect("open tmp"))
-        }
-    };
-    for line in io::BufReader::new(fd).lines() {
-        let line = line.expect("error reading log file");
-        let s = match serde_json::from_str::<Stats>(&line) {
-            Ok(s) => s,
-            Err(_) => Stats::V0(serde_json::from_str::<ps::Stats>(&line).expect("malformed log")),
-        };
+    for s in read_history_file(file).expect("failed to open archive file") {
         acc_1m = update_accum(acc_1m, s, one_minute, &mut enc_1m);
         acc_10m = update_accum(acc_10m, s, ten_minutes, &mut enc_10m);
         serde_json::to_writer(enc.by_ref(), &s).expect("failed to encode");
@@ -212,14 +296,44 @@ pub fn archive_log(cfg: &Config, file: Option<PathBuf>, date: Option<Date<Local>
                 tmp.set_extension("tmp");
                 fs::hard_link(&current, &tmp).expect("failed to create tmp file");
                 fs::remove_file(&current).expect("failed to unlink current file");
-                solar_client::send_command(&cfg, once(FromClient::LogRotated))
+                send_command(&cfg, iter::once(FromClient::LogRotated))
                     .expect("failed to reopen log file");
                 tmp
             }
         };
-        do_archive_log_file(&file, &archive);
+        do_archive_log_file(file.clone(), &archive);
         if is_current_log {
             fs::remove_file(&file).expect("failed to remove tmp file");
         }
     }
+}
+
+pub fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> + '_ {
+    let today = Local::today();
+    iter::from_fn(move || {
+        if days <= 0 {
+            None
+        } else {
+            let d = Duration::days(days);
+            days -= 1;
+            let file = today
+                .checked_sub_signed(d)
+                .map(|d| cfg.archive_for_date(d).ten_minute_averages);
+            file.and_then(|f| match read_history_file(f.clone()) {
+                Ok(i) => Some(i),
+                Err(e) => {
+                    error!("error opening log archive, skipping: {:?}, {}", f, e);
+                    None
+                }
+            })
+        }
+    })
+    .chain(match read_history_file(cfg.log_file()) {
+        Ok(i) => Some(decimate(Duration::seconds(600), i)),
+        Err(e) => {
+            error!("error opening todays log file, skipping: {}", e);
+            None
+        }
+    })
+    .flatten()
 }
