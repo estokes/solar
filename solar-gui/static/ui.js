@@ -30,8 +30,8 @@ function empty_chart_config(label, unit) {
 	    labels: [],
 	    datasets: [{
 		label: label,
-		backgroundColor: 'rgb(255,99,132)',
-		borderColor: 'rgb(255,99,132)',
+		backgroundColor: 'rgb(40,120,170)',
+		borderColor: 'rgb(40,120,170)',
 		data: [],
 		fill: false,
 	    }]
