@@ -74,26 +74,36 @@ function empty_chart_config(label, unit) {
     }
 }
 
+function trim(data) { while data.length() > 1440 { data.shift(); } }
+
 function update_charts(stats) {
+    var chargeCurrent = window.chartChargeCurrentCfg.data.datasets[0].data;
+    var ahCharge = window.chartAhChargeCfg.data.datasets[0].data;
+    var batteryVoltage = window.chartBatteryVoltageCfg.data.datasets[0].data;
+    var arrayPower = window.chartArrayPowerCfg.data.datasets[0].data;
     stats.forEach(e => {
 	var ts = new Date(e.V0.timestamp);
-	window.chartChargeCurrentCfg.data.datasets[0].data.push({
+	chargeCurrent.push({
 	    x: ts,
 	    y: e.V0.charge_current
 	});
-	window.chartAhChargeCfg.data.datasets[0].data.push({
+	ahCharge.push({
 	    x: ts,
 	    y: amp_seconds_to_amp_hours(e.V0.ah_charge_daily)
 	});
-	window.chartBatteryVoltageCfg.data.datasets[0].data.push({
+	batteryVoltage.push({
 	    x: ts,
 	    y: e.V0.battery_sense_voltage
 	});
-	window.chartArrayPowerCfg.data.datasets[0].data.push({
+	arrayPower.push({
 	    x: ts,
 	    y: e.V0.array_power
 	});
     })
+    trim(chargeCurrent);
+    trim(ahCharge);
+    trim(batteryVoltage);
+    trim(arrayPower);
     window.chartChargeCurrent.update();
     window.chartAhCharge.update();
     window.chartBatteryVoltage.update();
@@ -138,12 +148,7 @@ function loop() {
 	con.send('{"StatsHistory": 3}');
 	init_charts();
 	stats_iid = window.setInterval(() => { if(!receiving_history) con.send('"StatsCurrent"'); }, 5000);
-	chart_iid = window.setInterval(() => {
-	    if(!receiving_history) {
-		update_charts(history);
-		history = [];
-	    }
-	}, 600000);
+	chart_iid = window.setInterval(() => { if(!receiving_history) con.send('"StatsDecimated"'); }, 540000);
     };
     con.onmessage = function(e) {
 	var v = JSON.parse(e.data);
@@ -153,6 +158,8 @@ function loop() {
 	} else if (v.hasOwnProperty('Stats')) {
 	    history.push(v.Stats);
 	    if(!receiving_history) display_stats(v.Stats);
+	} else if (v.hasOwnProperty('StatsDecimated')) {
+	    if(!receiving_history) update_charts([v.StatsDecimated]);
 	} else if (v.hasOwnProperty('Status')) {
 	    console.log(v);
 	} else if (v == 'EndOfHistory') {
