@@ -1,7 +1,7 @@
-use crate::{ArchivedDay, Config, FromClient, Stats, send_command};
+use crate::{send_command, ArchivedDay, Config, FromClient, Stats};
 use chrono::{prelude::*, Duration};
 use libflate::{
-    gzip::{EncodeOptions, Encoder, Decoder},
+    gzip::{Decoder, EncodeOptions, Encoder},
     lz77::DefaultLz77Encoder,
 };
 use morningstar::prostar_mppt as ps;
@@ -117,10 +117,7 @@ pub fn stats_accum(acc: &mut Stats, s: &Stats) {
     );
 }
 
-pub struct Decimate<I>
-where
-    I: Iterator<Item = Stats>,
-{
+pub struct Decimate<I> {
     acc: Option<(DateTime<Local>, Stats)>,
     cutoff: Duration,
     iter: I,
@@ -316,24 +313,28 @@ pub fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> 
         } else {
             let d = Duration::days(days);
             days -= 1;
-            let file = today
+            today
                 .checked_sub_signed(d)
-                .map(|d| cfg.archive_for_date(d).ten_minute_averages);
-            file.and_then(|f| match read_history_file(f.clone()) {
-                Ok(i) => Some(i),
-                Err(e) => {
-                    error!("error opening log archive, skipping: {:?}, {}", f, e);
-                    None
-                }
-            })
-        }
-    })
-    .chain(match read_history_file(cfg.log_file()) {
-        Ok(i) => Some(decimate(Duration::seconds(600), i)),
-        Err(e) => {
-            error!("error opening todays log file, skipping: {}", e);
-            None
+                .map(|d| cfg.archive_for_date(d).ten_minute_averages)
+                .and_then(|f| match read_history_file(f.clone()) {
+                    Ok(i) => Some(i),
+                    Err(e) => {
+                        error!("error opening log archive, skipping: {:?}, {}", f, e);
+                        None
+                    }
+                })
         }
     })
     .flatten()
+    .chain(
+        match read_history_file(cfg.log_file()) {
+            Ok(i) => Some(decimate(Duration::seconds(600), i)),
+            Err(e) => {
+                error!("error opening todays log file, skipping: {}", e);
+                None
+            }
+        }
+        .into_iter()
+        .flatten(),
+    )
 }

@@ -7,17 +7,10 @@ use actix_files;
 use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
 use chrono::{prelude::*, Duration};
-use libflate::gzip;
 use solar_client::{
     archive, load_config, send_query, Config, FromClient, Stats, ToClient,
 };
 use std::{
-    error,
-    ffi::OsStr,
-    fs,
-    io::{self, BufRead, Read},
-    iter::{self, Iterator},
-    path::PathBuf,
     sync::{Arc, RwLock},
     thread,
 };
@@ -104,7 +97,7 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
                     },
                     FromBrowser::StatsHistory(days) => {
                         info!("fetching current stats going back {}", days);
-                        for s in read_history(&self.0.config, days) {
+                        for s in archive::read_history(&self.0.config, days) {
                             ctx.text(ToBrowser::Stats(s).enc())
                         }
                         ctx.text(ToBrowser::EndOfHistory.enc());
@@ -133,22 +126,22 @@ fn read_stats(appdata: AppData) {
             match s {
                 ToClient::Settings(_) | ToClient::Ok | ToClient::Err(_) => (),
                 ToClient::Stats(s) => {
-                    let sc = appdata.stats.write().unwrap();
+                    let mut sc = appdata.stats.write().unwrap();
                     *sc = match *sc {
                         None => Some(StatContainer {
                             current: s,
                             decimated: s,
                             decimated_acc: s,
-                            decimated_ts: s.timestamp,
+                            decimated_ts: s.timestamp(),
                         }),
                         Some(mut c) => {
                             c.current = s;
-                            if c.decimated_acc.timestamp - c.decimated_ts < ten_minutes {
+                            if c.decimated_acc.timestamp() - c.decimated_ts < ten_minutes {
                                 archive::stats_accum(&mut c.decimated_acc, &s);
                             } else {
                                 c.decimated = c.decimated_acc;
                                 c.decimated_acc = s;
-                                c.decimated_ts = s.timestamp;
+                                c.decimated_ts = s.timestamp();
                             }
                             Some(c)
                         }
