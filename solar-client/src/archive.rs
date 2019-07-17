@@ -4,7 +4,6 @@ use libflate::{
     gzip::{Decoder, EncodeOptions, Encoder},
     lz77::DefaultLz77Encoder,
 };
-use morningstar::prostar_mppt as ps;
 use std::{
     error,
     ffi::OsStr,
@@ -143,6 +142,7 @@ where
                     };
                     let (ts, acc) = self.acc.unwrap();
                     if acc.timestamp() - ts >= self.cutoff {
+                        self.acc = None;
                         return Some(acc);
                     }
                 }
@@ -213,22 +213,26 @@ fn read_history_file(
     file: PathBuf,
 ) -> Result<impl Iterator<Item = Stats>, Box<dyn error::Error>> {
     use serde_json::error::Category;
-    let reader: Box<dyn io::Read> = {
-        let f = fs::File::open(&file)?;
+    let mut buf : BufReader<Box<dyn Read>> = io::BufReader::new({
         if &file == Path::new("-") {
             Box::new(io::stdin())
-        } else if file.extension() != Some(OsStr::new("gz")) {
-            Box::new(f)
         } else {
-            Box::new(Decoder::new(f)?)
+            let f = fs::File::open(&file)?;
+            if file.extension() == Some(OsStr::new("gz")) {
+                Box::new(Decoder::new(f)?)
+            } else {
+                Box::new(f)
+            }
         }
-    };
-    let mut buf = io::BufReader::new(reader);
+    });
     let mut sbuf = String::new();
     Ok(iter::from_fn(move || {
         match buf.by_ref().read_line(&mut sbuf) {
             Ok(_) => (),
-            Err(_) => return None,
+            Err(e) => {
+                error!("error reading line from log file {:?}, {}", file, e);
+                return None
+            },
         }
         match serde_json::from_str(&sbuf) {
             Ok(o) => {
@@ -306,6 +310,7 @@ pub fn archive_log(cfg: &Config, file: Option<PathBuf>, date: Option<Date<Local>
 }
 
 pub fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> + '_ {
+    info!("read history going back {} days", days);
     let today = Local::today();
     iter::from_fn(move || {
         if days <= 0 {

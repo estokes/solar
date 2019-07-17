@@ -74,7 +74,7 @@ function empty_chart_config(label, unit) {
     }
 }
 
-function trim(data) { while data.length() > 1440 { data.shift(); } }
+function trim(data) { while(data.length > 1440) { data.shift(); } }
 
 function update_charts(stats) {
     var chargeCurrent = window.chartChargeCurrentCfg.data.datasets[0].data;
@@ -145,7 +145,7 @@ function loop() {
     con.onopen = function() {
 	$('#status').text('Loading History');
 	receiving_history = true;
-	con.send('{"StatsHistory": 3}');
+	con.send('{"StatsHistory": 10}');
 	init_charts();
 	stats_iid = window.setInterval(() => { if(!receiving_history) con.send('"StatsCurrent"'); }, 5000);
 	chart_iid = window.setInterval(() => { if(!receiving_history) con.send('"StatsDecimated"'); }, 540000);
