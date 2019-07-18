@@ -7,12 +7,14 @@ function jouls_to_kwh(j) {
 }
 
 function set_button_status(obj, state) {
-    if state {
+    if(state) {
 	obj.html('ON');
-	obj.style.color = 'green';
+	$(obj).addClass('green');
+	$(obj).removeClass('red');
     } else {
 	obj.html('OFF');
-	obj.sytle.color = 'red';
+	$(obj).addClass('red');
+	$(obj).removeClass('green');
     }
 }
 
@@ -211,8 +213,8 @@ function loop() {
 
 window.onload = function() {
     loop();
-    $('#enable_load').addEventListener('click', function() { set('Load', true); });
-    $('#disable_load').addEventListener('click', function() { set('Load', false); });
-    $('#enable_charging').addEventListener('click', function() { set('Charging', true); });
-    $('#disable_charging').addEventListener('click', function() { set('Charging', false); });
+    $('#enable_load').click(function() { set('Load', true); });
+    $('#disable_load').click(function() { set('Load', false); });
+    $('#enable_charging').click(function() { set('Charging', true); });
+    $('#disable_charging').click(function() { set('Charging', false); });
 }
