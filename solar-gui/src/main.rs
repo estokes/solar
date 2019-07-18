@@ -8,9 +8,10 @@ use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServ
 use actix_web_actors::ws;
 use chrono::{prelude::*, Duration};
 use solar_client::{
-    archive, load_config, send_query, Config, FromClient, Stats, ToClient,
+    archive, load_config, send_command, send_query, Config, FromClient, Stats, ToClient,
 };
 use std::{
+    iter,
     sync::{Arc, RwLock},
     thread,
 };
@@ -103,8 +104,19 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
                         ctx.text(ToBrowser::EndOfHistory.enc());
                         info!("done fetching stats");
                     }
-                    FromBrowser::Set(_, _) => {
-                        ctx.text(ToBrowser::CmdErr("not implemented".into()).enc())
+                    FromBrowser::Set(tgt, v) => {
+                        let cmd = match tgt {
+                            Target::Load => FromClient::SetLoadEnabled(v),
+                            Target::Charging => FromClient::SetChargingEnabled(v),
+                            Target::PhySolar | Target::PhyController => {
+                                ctx.text(ToBrowser::CmdErr("not implemented".into()).enc());
+                                return;
+                            }
+                        };
+                        match send_command(&self.0.config, iter::once(cmd)) {
+                            Ok(()) => ctx.text(ToBrowser::CmdOk.enc()),
+                            Err(e) => ctx.text(ToBrowser::CmdErr(e.to_string()).enc()),
+                        }
                     }
                 },
             },
