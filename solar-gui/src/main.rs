@@ -90,7 +90,7 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
                     FromBrowser::StatsCurrent => match *self.0.stats.read().unwrap() {
                         None => ctx.text(ToBrowser::CmdErr("not available".into()).enc()),
                         Some(c) => ctx.text(ToBrowser::Stats(c.current).enc()),
-                    }
+                    },
                     FromBrowser::StatsDecimated => match *self.0.stats.read().unwrap() {
                         None => ctx.text(ToBrowser::CmdErr("not available".into()).enc()),
                         Some(c) => ctx.text(ToBrowser::StatsDecimated(c.decimated).enc()),
@@ -119,10 +119,17 @@ fn control_socket(r: HttpRequest, stream: web::Payload) -> Result<HttpResponse, 
 
 fn read_stats(appdata: AppData) {
     let ten_minutes = Duration::seconds(600);
-    let iter =
-        send_query(&appdata.config, FromClient::TailStats).expect("failed to tail stats");
-    thread::spawn(move || {
-        for s in iter {
+    thread::spawn(move || loop {
+        let i: Box<dyn Iterator<Item = ToClient>> =
+            match send_query(&appdata.config, FromClient::TailStats) {
+                Ok(i) => Box::new(i),
+                Err(e) => {
+                    error!("failed to tail stats {}", e);
+                    thread::sleep(std::time::Duration::from_secs(60));
+                    Box::new(None.into_iter())
+                }
+            };
+        for s in i {
             match s {
                 ToClient::Settings(_) | ToClient::Ok | ToClient::Err(_) => (),
                 ToClient::Stats(s) => {
@@ -136,7 +143,8 @@ fn read_stats(appdata: AppData) {
                         }),
                         Some(mut c) => {
                             c.current = s;
-                            if c.decimated_acc.timestamp() - c.decimated_ts < ten_minutes {
+                            if c.decimated_acc.timestamp() - c.decimated_ts < ten_minutes
+                            {
                                 archive::stats_accum(&mut c.decimated_acc, &s);
                             } else {
                                 c.decimated = c.decimated_acc;

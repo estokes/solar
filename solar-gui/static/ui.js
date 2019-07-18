@@ -6,6 +6,16 @@ function jouls_to_kwh(j) {
     return j / 3600000;
 }
 
+function set_button_status(obj, state) {
+    if state {
+	obj.html('ON');
+	obj.style.color = 'green';
+    } else {
+	obj.html('OFF');
+	obj.sytle.color = 'red';
+    }
+}
+
 function display_stats(stats) {
     if (stats.hasOwnProperty('V0')) {
 	var stats = stats.V0;
@@ -18,6 +28,14 @@ function display_stats(stats) {
 	$('#ah_charge_daily').html(amp_seconds_to_amp_hours(stats.ah_charge_daily));
 	$('#load_state').html(stats.load_state);
 	$('#kwh_charge_total').html(jouls_to_kwh(stats.kwh_charge_total));
+	set_button_status(
+	    $('#load_status'),
+	    stats.load_state == 'Normal' || stats.load_state == 'LVD'
+	);
+	set_button_status(
+	    $('#charging_status'),
+	    stats.charge_state == 'BulkMPPT' || stats.charge_state == 'Float' || stats.charge_state == 'Night'
+	);
     } else {
 	console.log("error, unexpected stats version " + stats);
     }
@@ -123,11 +141,18 @@ function init_charts() {
 
 var con = null;
 
+function set(tgt, v) {
+    if(con != null) {
+	con.send(`{"Set": ["${tgt}", ${v}]}`);
+    }
+}
+
 function loop() {
     var receiving_history = false;
     var history = [];
     var stats_iid = 0;
     var chart_iid = 0;
+    var last = Date.now();
 
     var reload = function(msg) {
 	$('#status').text(msg);
@@ -151,6 +176,12 @@ function loop() {
 	chart_iid = window.setInterval(() => { if(!receiving_history) con.send('"StatsDecimated"'); }, 540000);
     };
     con.onmessage = function(e) {
+	var now = Date.now();
+	if(now - last <= 600000) { last = now; }
+	else {
+	    con.close();
+	    return;
+	}
 	var v = JSON.parse(e.data);
 	if (v == 'CmdOk') { }
 	else if (v.hasOwnProperty('CmdErr')) {
@@ -178,4 +209,10 @@ function loop() {
     };
 };
 
-window.onload = loop();
+window.onload = function() {
+    loop();
+    $('#enable_load').addEventListener('click', function() { set('Load', true); });
+    $('#disable_load').addEventListener('click', function() { set('Load', false); });
+    $('#enable_charging').addEventListener('click', function() { set('Charging', true); });
+    $('#disable_charging').addEventListener('click', function() { set('Charging', false); });
+}

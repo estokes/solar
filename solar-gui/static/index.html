@@ -2,53 +2,75 @@
 <meta charset="utf-8" />
 <html>
   <head>
-    <script src="jquery-3.4.1.js"></script>
-    <script src="Chart.bundle.js"></script>
-    <script src="ui.js"></script>
+    <script src="jquery-3.4.1.js" />
+    <script src="Chart.bundle.js" />
+    <script src="ui.js" />
     <link href="ui.css" rel="stylesheet" />
   </head>
   <body>
     <h3>Stats UI</h3>
-    <span id="status">not connected</span>
-    <span id="timestamp"></span>
-    <table>
-      <tbody>
-	<tr>
-	  <td>Charge State</td>
-	  <td id="charge_state"></td>
-	</tr>
-	<tr>
-	  <td>Load State</td>
-	  <td id="load_state"></td>
-	</tr>
-	<tr>
-	  <td>Battery Sense Voltage</td>
-	  <td id="battery_sense_voltage"></td>
-	  <td>V</td>
-	</tr>
-	<tr>
-	  <td>Charge Current</td>
-	  <td id="charge_current"></td>
-	  <td>A</td>
-	</tr>
-	<tr>
-	  <td>Array Power</td>
-	  <td id="array_power"></td>
-	  <td>W</td>
-	</tr>
-	<tr>
-	  <td>Ah Charge Daily</td>
-	  <td id="ah_charge_daily"></td>
-	  <td>Ah</td>
-	</tr>
-	<tr>
-	  <td>kWh Charge Total</td>
-	  <td id="kwh_charge_total"></td>
-	  <td>kWh</td>
-	</tr>
-      </tbody>
-    </table>
-    <div class="graph-container">
+    <div class="two-column-container">
+      <div>
+	<span id="status">not connected</span>
+	<span id="timestamp"></span>
+	<table>
+	  <tbody>
+	    <tr>
+	      <td>Charge State</td>
+	      <td id="charge_state"></td>
+	    </tr>
+	    <tr>
+	      <td>Load State</td>
+	      <td id="load_state"></td>
+	    </tr>
+	    <tr>
+	      <td>Battery Sense Voltage</td>
+	      <td id="battery_sense_voltage"></td>
+	      <td>V</td>
+	    </tr>
+	    <tr>
+	      <td>Charge Current</td>
+	      <td id="charge_current"></td>
+	      <td>A</td>
+	    </tr>
+	    <tr>
+	      <td>Array Power</td>
+	      <td id="array_power"></td>
+	      <td>W</td>
+	    </tr>
+	    <tr>
+	      <td>Ah Charge Daily</td>
+	      <td id="ah_charge_daily"></td>
+	      <td>Ah</td>
+	    </tr>
+	    <tr>
+	      <td>kWh Charge Total</td>
+	      <td id="kwh_charge_total"></td>
+	      <td>kWh</td>
+	    </tr>
+	  </tbody>
+	</table>
+      </div>
+      <div>
+	<table>
+	  <tbody>
+	    <tr>
+	      <td>Load</td>
+	      <td id="load_status"></td>
+	      <td><button id="enable_load">Enable</button></td>
+	      <td><button id="disable_load">Disable</button></td>
+	    </tr>
+	    <tr>
+	      <td>Charging</td>
+	      <td id="charging_status"></td>
+	      <td><button id="enable_charging">Enable</button></td>
+	      <td><button id="disable_charging">Disable</button></td>
+	    </tr>
+	  </tbody>
+	</table>
+      </div>
+    </div>
+    <div class="two-column-container">
       <div>
 	<canvas id="current_chart"></canvas>
       </div>

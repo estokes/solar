@@ -8,7 +8,7 @@ use std::{
     error,
     ffi::OsStr,
     fs::{self, OpenOptions},
-    io::{self, BufRead, LineWriter, Read, Write},
+    io::{self, BufRead, BufReader, LineWriter, Read, Write},
     iter::{self, Iterator},
     path::{Path, PathBuf},
 };
