@@ -8,11 +8,9 @@ function jouls_to_kwh(j) {
 
 function set_button_status(obj, state) {
     if(state) {
-	obj.html('ON');
 	$(obj).addClass('green');
 	$(obj).removeClass('red');
     } else {
-	obj.html('OFF');
 	$(obj).addClass('red');
 	$(obj).removeClass('green');
     }
@@ -36,7 +34,10 @@ function display_stats(stats) {
 	);
 	set_button_status(
 	    $('#charging_status'),
-	    stats.charge_state == 'BulkMPPT' || stats.charge_state == 'Float' || stats.charge_state == 'Night'
+	    stats.charge_state == 'BulkMPPT'
+		|| stats.charge_state == 'Float'
+		|| stats.charge_state == 'Night'
+		|| stats.charge_state == "Absorption"
 	);
     } else {
 	console.log("error, unexpected stats version " + stats);
