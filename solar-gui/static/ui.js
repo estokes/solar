@@ -18,8 +18,8 @@ function set_button_status(obj, state) {
 
 function display_stats(stats) {
     if (stats.hasOwnProperty('V1')) {
-	var stats = stats.V1.controller;
 	var phy = stats.V1.phy;
+	var stats = stats.V1.controller;
 	$('#timestamp').html(stats.timestamp);
 	$('#battery_sense_voltage').html(stats.battery_sense_voltage);
 	$('#charge_current').html(stats.charge_current);

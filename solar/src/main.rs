@@ -79,6 +79,7 @@ fn run_server(config: Config) {
     let mut mb = modbus::Connection::new(config.device.clone(), config.modbus_id);
     control_socket::run_server(&config, to_main);
     let mut tailing: Vec<Sender<ToClient>> = Vec::new();
+    let mut last_st: Option<ps::Stats> = None;
 
     for msg in receiver.iter() {
         match msg {
@@ -132,12 +133,17 @@ fn run_server(config: Config) {
                 }
             },
             ToMainLoop::Tick => {
-                if mb.rpi().master() && mb.rpi().battery() {
-                    let controller = log_fatal!(
-                            mb.read_stats(),
-                            "fatal: failed to read stats {}",
-                        break
-                    );
+                if mb.rpi().master() && mb.rpi().battery() || last_st.is_some() {
+                    let controller = {
+                        if mb.rpi().master() && mb.rpi().battery() {
+                            last_st = Some(log_fatal!(
+                                mb.read_stats(),
+                                "fatal: failed to read stats {}",
+                                break
+                            ));
+                        }
+                        last_st.unwrap()
+                    };
                     let phy = solar_client::Phy {
                         solar: mb.rpi().solar(),
                         battery: mb.rpi().battery(),
@@ -240,6 +246,8 @@ enum SubCommand {
     },
     #[structopt(name = "settings", help = "read/write charge controller settings")]
     Settings(Settings),
+    #[structopt(name = "night", help = "night power save mode")]
+    Night,
 }
 
 #[derive(Debug, StructOpt)]
@@ -371,6 +379,13 @@ fn main() {
         SubCommand::Phy(Phy::Master(v)) => {
             solar_client::send_command(&config, once(FromClient::SetPhyMaster(v.get())))
                 .expect("failed to set physical battery")
+        }
+        SubCommand::Night => {
+            solar_client::send_command(&config, &[
+                FromClient::SetPhyMaster(false),
+                FromClient::SetPhySolar(false),
+                FromClient::SetPhyBattery(false)
+            ]).expect("failed to enter night mode")
         }
     }
 }
