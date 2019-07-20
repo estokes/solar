@@ -1,6 +1,10 @@
-use morningstar::{error as mse, prostar_mppt as ps};
 use crate::rpi::Rpi;
-use std::{thread::sleep, time::{Instant, Duration}};
+use morningstar::{error as mse, prostar_mppt as ps};
+use std::{
+    ops::Drop,
+    thread::sleep,
+    time::{Duration, Instant},
+};
 
 pub struct Connection {
     rpi: Rpi,
@@ -10,42 +14,58 @@ pub struct Connection {
     last_command: Instant,
 }
 
+impl Drop for Connection {
+    fn drop(&mut self) {
+        rpi.mppt_disable();
+    }
+}
+
 impl Connection {
     pub fn new(device: String, address: u8) -> Self {
-        let mut rpi =
-            log_fatal!(Rpi::new(), "failed to init gpio {}",
-                       panic!("failed to init gpio"));
+        let mut rpi = log_fatal!(
+            Rpi::new(),
+            "failed to init gpio {}",
+            panic!("failed to init gpio")
+        );
         rpi.mpptc_enable();
-        Connection { rpi, con: None, device, address, last_command: Instant::now() }
+        Connection {
+            rpi,
+            con: None,
+            device,
+            address,
+            last_command: Instant::now(),
+        }
     }
 
     fn get_con(&mut self) -> mse::Result<&ps::Connection> {
         match self.con {
             Some(ref con) => Ok(con),
-            None =>
-                match ps::Connection::new(&self.device, self.address) {
-                    Err(e) => Err(e),
-                    Ok(con) => {
-                        self.con = Some(con);
-                        Ok(self.con.as_ref().unwrap())
-                    }
+            None => match ps::Connection::new(&self.device, self.address) {
+                Err(e) => Err(e),
+                Ok(con) => {
+                    self.con = Some(con);
+                    Ok(self.con.as_ref().unwrap())
                 }
+            },
         }
     }
 
     fn eval<F, R>(&mut self, mut f: F) -> mse::Result<R>
-    where F: FnMut(&ps::Connection) -> mse::Result<R> {
+    where
+        F: FnMut(&ps::Connection) -> mse::Result<R>,
+    {
         let mut tries = 0;
         loop {
             let r = match self.get_con() {
                 Ok(con) => f(con),
-                Err(e) => Err(e)
+                Err(e) => Err(e),
             };
             match r {
                 Ok(r) => break Ok(r),
                 Err(e) => {
-                    if tries >= 4 { break Err(e) }
-                    else if tries >= 3 {
+                    if tries >= 4 {
+                        break Err(e);
+                    } else if tries >= 3 {
                         self.con = None;
                         self.rpi.mpptc_reboot();
                         tries += 1
@@ -63,7 +83,9 @@ impl Connection {
         let throttle = Duration::from_secs(1);
         let now = Instant::now();
         let elapsed = now - self.last_command;
-        if elapsed < throttle { sleep(throttle - elapsed) }
+        if elapsed < throttle {
+            sleep(throttle - elapsed)
+        }
         self.last_command = now;
     }
 
@@ -76,8 +98,8 @@ impl Connection {
                 let c = self.get_con()?;
                 let _ = c.write_coil(coil, bit);
                 Ok(())
-            },
-            (_, _) => Ok(self.eval(move |c| c.write_coil(coil, bit))?)
+            }
+            (_, _) => Ok(self.eval(move |c| c.write_coil(coil, bit))?),
         }
     }
 
