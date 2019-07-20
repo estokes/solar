@@ -382,7 +382,6 @@ fn main() {
         }
         SubCommand::Night => {
             solar_client::send_command(&config, &[
-                FromClient::SetPhyMaster(false),
                 FromClient::SetPhySolar(false),
                 FromClient::SetPhyBattery(false)
             ]).expect("failed to enter night mode")

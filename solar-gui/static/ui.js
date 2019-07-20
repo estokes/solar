@@ -21,14 +21,14 @@ function display_stats(stats) {
 	var phy = stats.V1.phy;
 	var stats = stats.V1.controller;
 	$('#timestamp').html(stats.timestamp);
-	$('#battery_sense_voltage').html(stats.battery_sense_voltage);
-	$('#charge_current').html(stats.charge_current);
-	$('#array_power').html(stats.array_power);
+	$('#battery_sense_voltage').html(stats.battery_sense_voltage.toFixed(2));
+	$('#charge_current').html(stats.charge_current.toFixed(2));
+	$('#array_power').html(stats.array_power.toFixed(2));
 	$('#charge_state').html(stats.charge_state);
 	$('#load_state').html(stats.load_state);
-	$('#ah_charge_daily').html(amp_seconds_to_amp_hours(stats.ah_charge_daily));
+	$('#ah_charge_daily').html(amp_seconds_to_amp_hours(stats.ah_charge_daily).toFixed(2));
 	$('#load_state').html(stats.load_state);
-	$('#kwh_charge_total').html(jouls_to_kwh(stats.kwh_charge_total));
+	$('#kwh_charge_total').html(jouls_to_kwh(stats.kwh_charge_total.toFixed(2)));
 	set_rg_status($('#timestamp'), Date.now() - new Date(stats.timestamp) < 60000);
 	set_rg_status(
 	    $('#load_status'),
