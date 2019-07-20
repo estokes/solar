@@ -35,7 +35,8 @@ enum Target {
     Load,
     Charging,
     PhySolar,
-    PhyController,
+    PhyBattery,
+    PhyMaster,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -106,10 +107,12 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
                     }
                     FromBrowser::Set(tgt, v) => {
                         let cmd = match tgt {
-                            Target::Load => FromClient::SetLoadEnabled(v),
-                            Target::Charging => FromClient::SetChargingEnabled(v),
-                            Target::PhySolar | Target::PhyController => {
-                                ctx.text(ToBrowser::CmdErr("not implemented".into()).enc());
+                            Target::Load => FromClient::SetLoad(v),
+                            Target::Charging => FromClient::SetCharging(v),
+                            Target::PhySolar | Target::PhyBattery | Target::PhyMaster => {
+                                ctx.text(
+                                    ToBrowser::CmdErr("not implemented".into()).enc(),
+                                );
                                 return;
                             }
                         };
