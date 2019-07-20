@@ -132,9 +132,6 @@ impl Rpi {
     // returns the state of the relay
     pub fn set_master(&mut self, b: bool) -> bool {
         if b {
-            self.0.off(MASTER);
-            false
-        } else {
             if self.0.get(BATTERY).is_set_high() || self.0.get(SOLAR).is_set_high() {
                 self.0.on(MASTER);
                 true
@@ -142,6 +139,9 @@ impl Rpi {
                 self.0.off(MASTER); // better safe than fire
                 false
             }
+        } else {
+            self.0.off(MASTER);
+            false
         }
     }
 
