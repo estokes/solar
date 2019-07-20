@@ -109,12 +109,9 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
                         let cmd = match tgt {
                             Target::Load => FromClient::SetLoad(v),
                             Target::Charging => FromClient::SetCharging(v),
-                            Target::PhySolar | Target::PhyBattery | Target::PhyMaster => {
-                                ctx.text(
-                                    ToBrowser::CmdErr("not implemented".into()).enc(),
-                                );
-                                return;
-                            }
+                            Target::PhySolar => FromClient::SetPhySolar(v),
+                            Target::PhyBattery => FromClient::SetPhyBattery(v),
+                            Target::PhyMaster => FromClient::SetPhyMaster(v),
                         };
                         match send_command(&self.0.config, iter::once(cmd)) {
                             Ok(()) => ctx.text(ToBrowser::CmdOk.enc()),
