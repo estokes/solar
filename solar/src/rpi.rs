@@ -26,7 +26,16 @@ impl Relays {
         Ok(Relays { r0, r1, r2, r3 })
     }
 
-    fn get(&mut self, r: Relay) -> &mut OutputPin {
+    fn get(&self, r: Relay) -> &OutputPin {
+        match r {
+            Relay::R0 => &self.r0,
+            Relay::R1 => &self.r1,
+            Relay::R2 => &self.r2,
+            Relay::R3 => &self.r3,
+        }
+    }
+
+    fn get_mut(&mut self, r: Relay) -> &mut OutputPin {
         match r {
             Relay::R0 => &mut self.r0,
             Relay::R1 => &mut self.r1,
@@ -36,11 +45,11 @@ impl Relays {
     }
 
     fn on(&mut self, r: Relay) {
-        self.get(r).set_high();
+        self.get_mut(r).set_high();
     }
 
     fn off(&mut self, r: Relay) {
-        self.get(r).set_low();
+        self.get_mut(r).set_low();
     }
 }
 
@@ -85,5 +94,66 @@ impl Rpi {
     pub fn mpptc_reboot(&mut self) {
         self.mpptc_disable();
         self.mpptc_enable();
+    }
+
+    // the voltage converter will literally explode if it is allowed
+    // to run without a load, so we must turn it off if we ever turn
+    // off both loads
+    fn disable_non_master(&mut self, to_disable, other) {
+        if self.0.get(other).is_set_low() {
+            self.0.off(MASTER);
+            // allow the voltage converter to switch off and drain
+            thread::sleep(DELAY_RELAY);
+        }
+        self.0.off(to_disable)
+    }
+
+    fn enable_non_master(&mut self, to_enable, other) {
+        self.0.on(to_enable);
+        thread::sleep(DELAY_RELAY);
+    }
+
+    pub fn set_solar(&mut self, b: bool) {
+        if b {
+            self.enable_non_master(SOLAR);
+        } else {
+            self.disable_non_master(SOLAR, BATTERY);
+        }
+    }
+
+    pub fn set_battery(&mut self, b: bool) {
+        if b {
+            self.enable_non_master(BATTERY);
+        } else {
+            self.disable_non_master(BATTERY, SOLAR);
+        }
+    }
+
+    // returns the state of the relay
+    pub fn set_master(&mut self, b: bool) -> bool {
+        if b {
+            self.0.off(MASTER);
+            false
+        } else {
+            if self.0.get(BATTERY).is_set_high() || self.0.get(SOLAR).is_set_high() {
+                self.0.on(MASTER);
+                true
+            } else {
+                self.0.off(MASTER); // better safe than fire
+                false
+            }
+        }
+    }
+
+    pub fn solar(&self) -> bool {
+        self.0.get(SOLAR).is_set_high()
+    }
+
+    pub fn battery(&self) -> bool {
+        self.0.get(BATTERY).is_set_high()
+    }
+
+    pub fn master(&self) -> bool {
+        self.0.get(MASTER).is_set_high()
     }
 }

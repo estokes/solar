@@ -10,7 +10,7 @@ use morningstar::prostar_mppt as ps;
 
 use std::{
     borrow::Borrow,
-    fs,
+    fmt, fs,
     io::{self, BufRead, BufReader, LineWriter, Write},
     iter::Iterator,
     os::unix::net::UnixStream,
@@ -21,8 +21,11 @@ pub mod archive;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub enum FromClient {
-    SetChargingEnabled(bool),
-    SetLoadEnabled(bool),
+    SetCharging(bool),
+    SetLoad(bool),
+    SetPhySolar(bool),
+    SetPhyBattery(bool),
+    SetPhyMaster(bool),
     ResetController,
     LogRotated,
     Stop,
@@ -32,22 +35,61 @@ pub enum FromClient {
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+pub struct Phy {
+    solar: bool,
+    battery: bool,
+    master: bool,
+}
+
+impl fmt::Display for Phy {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "solar: {}\nbattery: {}\nmaster: {}\n",
+            self.solar, self.battery, self.master
+        )
+    }
+}
+
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Stats {
     V0(ps::Stats),
+    V1 { controller: ps::Stats, phy: Phy },
+}
+
+impl Stats {
+    fn upgrade(self) -> Self {
+        match self {
+            Stats::V1 { .. } => self,
+            Stats::V0(st) => Stats::V1 {
+                controller: st,
+                phy: Phy {
+                    solar: true,
+                    battery: true,
+                    master: true,
+                },
+            },
+        }
+    }
 }
 
 impl Stats {
     pub fn timestamp(&self) -> chrono::DateTime<chrono::offset::Local> {
         match self {
-            Stats::V0(ref s) => s.timestamp
+            Stats::V0(ref s) => s.timestamp,
+            Stats::V1 {controller: ref c, ..} => c.timestamp,
         }
     }
 }
 
-impl std::fmt::Display for Stats {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+impl fmt::Display for Stats {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
         match self {
             Stats::V0(s) => s.fmt(fmt),
+            Stats::V1 { controller, phy } => {
+                controller.fmt(fmt)?;
+                phy.fmt(fmt)
+            }
         }
     }
 }
@@ -65,7 +107,10 @@ struct UnexpectedObjectKind;
 
 impl std::error::Error for UnexpectedObjectKind {}
 impl std::fmt::Display for UnexpectedObjectKind {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter) -> std::result::Result<(), std::fmt::Error> {
+    fn fmt(
+        &self,
+        fmt: &mut std::fmt::Formatter,
+    ) -> std::result::Result<(), std::fmt::Error> {
         write!(fmt, "expected a file, found something else")
     }
 }
@@ -180,7 +225,9 @@ pub fn send_command(
         match serde_json::from_str(&line)? {
             ToClient::Ok => (),
             ToClient::Err(e) => bail!(e),
-            ToClient::Settings(_) | ToClient::Stats(_) => bail!("got unexpected command reply"),
+            ToClient::Settings(_) | ToClient::Stats(_) => {
+                bail!("got unexpected command reply")
+            }
         }
     }
     Ok(())

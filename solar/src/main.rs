@@ -83,11 +83,28 @@ fn run_server(config: Config) {
     for msg in receiver.iter() {
         match msg {
             ToMainLoop::FromClient(msg, reply) => match msg {
-                FromClient::SetChargingEnabled(b) => {
+                FromClient::SetCharging(b) => {
                     send_reply(mb.write_coil(ps::Coil::ChargeDisconnect, !b), reply)
                 }
-                FromClient::SetLoadEnabled(b) => {
+                FromClient::SetLoad(b) => {
                     send_reply(mb.write_coil(ps::Coil::LoadDisconnect, !b), reply)
+                }
+                FromClient::SetPhySolar(b) => {
+                    mb.rpi_mut().set_solar(b);
+                    reply.send(ToClient::Ok)
+                }
+                FromClient::SetPhyBattery(b) => {
+                    mb.rpi_mut().set_battery(b);
+                    reply.send(ToClient::Ok);
+                }
+                FromClient::SetPhyMaster(b) => {
+                    if mb.rpi_mut().set_battery(b) == b {
+                        reply.send(ToClient::Ok);
+                    } else {
+                        reply.send(ToClient::Err(
+                            "design rules prohibit setting the master relay".into(),
+                        ));
+                    }
                 }
                 FromClient::ResetController => {
                     send_reply(mb.write_coil(ps::Coil::ResetControl, true), reply)
@@ -115,33 +132,79 @@ fn run_server(config: Config) {
                 }
             },
             ToMainLoop::Tick => {
-                let st = Stats::V0(log_fatal!(
-                    mb.read_stats(),
-                    "fatal: failed to read stats {}",
-                    break
-                ));
-                log_fatal!(
-                    serde_json::to_writer(log.by_ref(), &st),
-                    "fatal: failed to log stats {}",
-                    break
-                );
-                log_fatal!(
-                    write!(log.by_ref(), "\n"),
-                    "fatal: failed to log stats {}",
-                    break
-                );
-                let mut i = 0;
-                while i < tailing.len() {
-                    match tailing[i].send(ToClient::Stats(st)) {
-                        Ok(()) => i += 1,
-                        Err(_) => {
-                            tailing.remove(i);
+                if mb.rpi().master() && mb.rpi().battery() {
+                    let controller = log_fatal!(
+                            mb.read_stats(),
+                            "fatal: failed to read stats {}",
+                        break
+                    );
+                    let phy = solar_client::Phy {
+                        solar: mb.rpi().solar(),
+                        battery: mb.rpi().battery(),
+                        master: mb.rpi().master(),
+                    };
+                    let st = Stats::V1 { controller, phy };
+                    log_fatal!(
+                        serde_json::to_writer(log.by_ref(), &st),
+                        "fatal: failed to log stats {}",
+                        break
+                    );
+                    log_fatal!(
+                        write!(log.by_ref(), "\n"),
+                        "fatal: failed to log stats {}",
+                        break
+                    );
+                    let mut i = 0;
+                    while i < tailing.len() {
+                        match tailing[i].send(ToClient::Stats(st)) {
+                            Ok(()) => i += 1,
+                            Err(_) => {
+                                tailing.remove(i);
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+#[derive(Debug, StructOpt)]
+enum OnOff {
+    #[structopt(name = "on")]
+    On,
+    #[structopt(name = "off")]
+    Off,
+}
+
+impl OnOff {
+    fn get(&self) -> bool {
+        match self {
+            OnOff::On => true,
+            OnOff::Off => false,
+        }
+    }
+}
+
+#[derive(Debug, StructOpt)]
+enum Phy {
+    #[structopt(name = "solar", help = "enable/disable solar panels")]
+    Solar(OnOff),
+    #[structopt(name = "battery", help = "enable/disable battery")]
+    Battery(OnOff),
+    #[structopt(name = "master", help = "enable/disable master")]
+    Master(OnOff),
+}
+
+#[derive(Debug, StructOpt)]
+enum Settings {
+    #[structopt(name = "read", help = "read charge controller settings")]
+    Read {
+        #[structopt(short = "j", long = "json")]
+        json: bool,
+    },
+    #[structopt(name = "write", help = "write charge controller settings")]
+    Write { file: String },
 }
 
 #[derive(Debug, StructOpt)]
@@ -153,37 +216,30 @@ enum SubCommand {
     },
     #[structopt(name = "stop")]
     Stop,
-    #[structopt(name = "disable-load")]
-    DisableLoad,
-    #[structopt(name = "enable-load")]
-    EnableLoad,
-    #[structopt(name = "disable-charging")]
-    DisableCharging,
-    #[structopt(name = "enable-charging")]
-    EnableCharging,
+    #[structopt(name = "load")]
+    Load(OnOff),
+    #[structopt(name = "charging")]
+    Charging(OnOff),
+    #[structopt(name = "phy")]
+    Phy(Phy),
     #[structopt(name = "cancel-float")]
     CancelFloat,
-    #[structopt(name = "archive-log")]
+    #[structopt(name = "archive", help = "archive todays log file")]
     ArchiveLog {
         #[structopt(short = "f", long = "file", help = "file to read, - to read stdin")]
         file: Option<String>,
         #[structopt(short = "d", long = "to-date")]
         to_date: Option<String>,
     },
-    #[structopt(name = "reset-controller")]
+    #[structopt(name = "reset", help = "reset the charge controller")]
     ResetController,
-    #[structopt(name = "tail-stats")]
+    #[structopt(name = "tail")]
     TailStats {
         #[structopt(short = "j", long = "json")]
         json: bool,
     },
-    #[structopt(name = "read-settings")]
-    ReadSettings {
-        #[structopt(short = "j", long = "json")]
-        json: bool,
-    },
-    #[structopt(name = "write-settings")]
-    WriteSettings { file: String },
+    #[structopt(name = "settings", help = "read/write charge controller settings")]
+    Settings(Settings),
 }
 
 #[derive(Debug, StructOpt)]
@@ -220,34 +276,20 @@ fn main() {
         }
         SubCommand::Stop => solar_client::send_command(&config, once(FromClient::Stop))
             .expect("failed to stop the daemon"),
-        SubCommand::DisableLoad => solar_client::send_command(
+        SubCommand::Load(v) => solar_client::send_command(
             &config,
             &[
                 FromClient::SetChargingEnabled(false),
-                FromClient::SetLoadEnabled(false),
+                FromClient::SetLoadEnabled(v.get()),
                 FromClient::SetChargingEnabled(true),
             ],
         )
-        .expect("failed to disable load. Is the daemon running?"),
-        SubCommand::EnableLoad => solar_client::send_command(
+        .expect("failed to set the load. Is the daemon running?"),
+        SubCommand::Charging(v) => solar_client::send_command(
             &config,
-            &[
-                FromClient::SetChargingEnabled(false),
-                FromClient::SetLoadEnabled(true),
-                FromClient::SetChargingEnabled(true),
-            ],
-        )
-        .expect("failed to enable load. Is the daemon running?"),
-        SubCommand::DisableCharging => solar_client::send_command(
-            &config,
-            once(FromClient::SetChargingEnabled(false)),
+            once(FromClient::SetChargingEnabled(v.get())),
         )
         .expect("failed to disable charging. Is the daemon running?"),
-        SubCommand::EnableCharging => solar_client::send_command(
-            &config,
-            once(FromClient::SetChargingEnabled(true)),
-        )
-        .expect("failed to enable charging. Is the daemon running?"),
         SubCommand::CancelFloat => solar_client::send_command(
             &config,
             &[
@@ -293,7 +335,7 @@ fn main() {
                 }
             }
         }
-        SubCommand::ReadSettings { json } => {
+        SubCommand::Settings(Settings::Read { json }) => {
             match solar_client::send_query(&config, FromClient::ReadSettings)
                 .expect("failed to get settings")
                 .next()
@@ -311,12 +353,24 @@ fn main() {
                 }
             }
         }
-        SubCommand::WriteSettings { file } => {
+        SubCommand::Settings(Settings::Write { file }) => {
             let file = fs::File::open(&file).expect("failed to open settings");
             let settings =
                 serde_json::from_reader(&file).expect("failed to parse settings");
             solar_client::send_command(&config, once(FromClient::WriteSettings(settings)))
                 .expect("failed to write settings")
+        }
+        SubCommand::Phy(Phy::Solar(v)) => {
+            solar_client::send_command(&config, once(FromClient::SetPhySolar(v.get())))
+                .expect("failed to set physical solar")
+        }
+        SubCommand::Phy(Phy::Battery(v)) => {
+            solar_client::send_command(&config, once(FromClient::SetPhyBattery(v.get())))
+                .expect("failed to set physical battery")
+        }
+        SubCommand::Phy(Phy::Master(v)) => {
+            solar_client::send_command(&config, once(FromClient::SetPhyMaster(v.get())))
+                .expect("failed to set physical battery")
         }
     }
 }

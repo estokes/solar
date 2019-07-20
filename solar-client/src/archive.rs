@@ -41,9 +41,11 @@ pub fn stats_accum(acc: &mut Stats, s: &Stats) {
     use std::cmp::max;
     let acc = match acc {
         Stats::V0(ref mut s) => s,
+        Stats::V1 { controller: ref mut c, .. } => c
     };
     let s = match s {
         Stats::V0(ref s) => s,
+        Stats::V1 { controller: ref c, .. } => c
     };
     acc.battery_v_min_daily = acc.battery_v_min_daily.min(s.battery_v_min_daily);
     acc.rts_temperature = match (acc.rts_temperature, s.rts_temperature) {
@@ -234,10 +236,10 @@ fn read_history_file(
                 return None
             },
         }
-        match serde_json::from_str(&sbuf) {
+        match serde_json::from_str::<Stats>(&sbuf) {
             Ok(o) => {
                 sbuf.clear();
-                Some(o)
+                Some(o.upgrade())
             }
             Err(e) => {
                 match e.classify() {

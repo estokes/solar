@@ -117,4 +117,12 @@ impl Connection {
         self.wait_for_throttle();
         Ok(self.eval(|c| c.write_settings(settings))?)
     }
+
+    pub fn rpi(&self) -> &Rpi {
+        &self.rpi
+    }
+
+    pub fn rpi_mut(&mut self) -> &mut Rpi {
+        &mut self.rpi
+    }
 }
