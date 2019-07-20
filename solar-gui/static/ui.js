@@ -21,7 +21,6 @@ function display_stats(stats) {
 	var phy = stats.V1.phy;
 	var stats = stats.V1.controller;
 	$('#timestamp').html(stats.timestamp);
-	set_rg_status($('#timestamp'), Date.now() - stats.timestamp > 60000);
 	$('#battery_sense_voltage').html(stats.battery_sense_voltage);
 	$('#charge_current').html(stats.charge_current);
 	$('#array_power').html(stats.array_power);
@@ -30,6 +29,7 @@ function display_stats(stats) {
 	$('#ah_charge_daily').html(amp_seconds_to_amp_hours(stats.ah_charge_daily));
 	$('#load_state').html(stats.load_state);
 	$('#kwh_charge_total').html(jouls_to_kwh(stats.kwh_charge_total));
+	set_rg_status($('#timestamp'), Date.now() - new Date(stats.timestamp) < 60000);
 	set_rg_status(
 	    $('#load_status'),
 	    stats.load_state == 'Normal' || stats.load_state == 'LVD'
