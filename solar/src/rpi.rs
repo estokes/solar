@@ -99,7 +99,7 @@ impl Rpi {
     // the voltage converter will literally explode if it is allowed
     // to run without a load, so we must turn it off if we ever turn
     // off both loads
-    fn disable_non_master(&mut self, to_disable, other) {
+    fn disable_non_master(&mut self, to_disable: Relay, other: Relay) {
         if self.0.get(other).is_set_low() {
             self.0.off(MASTER);
             // allow the voltage converter to switch off and drain
@@ -108,7 +108,7 @@ impl Rpi {
         self.0.off(to_disable)
     }
 
-    fn enable_non_master(&mut self, to_enable, other) {
+    fn enable_non_master(&mut self, to_enable: Relay) {
         self.0.on(to_enable);
         thread::sleep(DELAY_RELAY);
     }

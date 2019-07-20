@@ -36,9 +36,9 @@ pub enum FromClient {
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct Phy {
-    solar: bool,
-    battery: bool,
-    master: bool,
+    pub solar: bool,
+    pub battery: bool,
+    pub master: bool,
 }
 
 impl fmt::Display for Phy {

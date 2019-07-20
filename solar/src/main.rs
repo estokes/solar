@@ -91,17 +91,17 @@ fn run_server(config: Config) {
                 }
                 FromClient::SetPhySolar(b) => {
                     mb.rpi_mut().set_solar(b);
-                    reply.send(ToClient::Ok)
+                    let _ = reply.send(ToClient::Ok);
                 }
                 FromClient::SetPhyBattery(b) => {
                     mb.rpi_mut().set_battery(b);
-                    reply.send(ToClient::Ok);
+                    let _ = reply.send(ToClient::Ok);
                 }
                 FromClient::SetPhyMaster(b) => {
-                    if mb.rpi_mut().set_battery(b) == b {
-                        reply.send(ToClient::Ok);
+                    if mb.rpi_mut().set_master(b) == b {
+                        let _ = reply.send(ToClient::Ok);
                     } else {
-                        reply.send(ToClient::Err(
+                        let _ = reply.send(ToClient::Err(
                             "design rules prohibit setting the master relay".into(),
                         ));
                     }
@@ -279,22 +279,22 @@ fn main() {
         SubCommand::Load(v) => solar_client::send_command(
             &config,
             &[
-                FromClient::SetChargingEnabled(false),
-                FromClient::SetLoadEnabled(v.get()),
-                FromClient::SetChargingEnabled(true),
+                FromClient::SetCharging(false),
+                FromClient::SetLoad(v.get()),
+                FromClient::SetCharging(true),
             ],
         )
         .expect("failed to set the load. Is the daemon running?"),
         SubCommand::Charging(v) => solar_client::send_command(
             &config,
-            once(FromClient::SetChargingEnabled(v.get())),
+            once(FromClient::SetCharging(v.get())),
         )
         .expect("failed to disable charging. Is the daemon running?"),
         SubCommand::CancelFloat => solar_client::send_command(
             &config,
             &[
-                FromClient::SetChargingEnabled(false),
-                FromClient::SetChargingEnabled(true),
+                FromClient::SetCharging(false),
+                FromClient::SetCharging(true),
             ],
         )
         .expect("failed to cancel float"),
