@@ -13,3 +13,7 @@
 .red {
     background-color: #f00;
 }
+
+div.center {
+    margin: 0 auto;
+}
