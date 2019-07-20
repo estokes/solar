@@ -17,8 +17,9 @@ function set_button_status(obj, state) {
 }
 
 function display_stats(stats) {
-    if (stats.hasOwnProperty('V0')) {
-	var stats = stats.V0;
+    if (stats.hasOwnProperty('V1')) {
+	var stats = stats.V1.controller;
+	var phy = stats.V1.phy;
 	$('#timestamp').html(stats.timestamp);
 	$('#battery_sense_voltage').html(stats.battery_sense_voltage);
 	$('#charge_current').html(stats.charge_current);
@@ -39,6 +40,9 @@ function display_stats(stats) {
 		|| stats.charge_state == 'Night'
 		|| stats.charge_state == "Absorption"
 	);
+	set_button_status($('#phy_solar'), phy.solar);
+	set_button_status($('#phy_battery'), phy.battery);
+	set_button_status($('#phy_master'), phy.master);
     } else {
 	console.log("error, unexpected stats version " + stats);
     }
@@ -103,22 +107,22 @@ function update_charts(stats) {
     var batteryVoltage = window.chartBatteryVoltageCfg.data.datasets[0].data;
     var arrayPower = window.chartArrayPowerCfg.data.datasets[0].data;
     stats.forEach(e => {
-	var ts = new Date(e.V0.timestamp);
+	var ts = new Date(e.V1.controller.timestamp);
 	chargeCurrent.push({
 	    x: ts,
-	    y: e.V0.charge_current
+	    y: e.V1.controller.charge_current
 	});
 	ahCharge.push({
 	    x: ts,
-	    y: amp_seconds_to_amp_hours(e.V0.ah_charge_daily)
+	    y: amp_seconds_to_amp_hours(e.V1.controller.ah_charge_daily)
 	});
 	batteryVoltage.push({
 	    x: ts,
-	    y: e.V0.battery_sense_voltage
+	    y: e.V1.controller.battery_sense_voltage
 	});
 	arrayPower.push({
 	    x: ts,
-	    y: e.V0.array_power
+	    y: e.V1.controller.array_power
 	});
     })
     trim(chargeCurrent);
@@ -218,4 +222,10 @@ window.onload = function() {
     $('#disable_load').click(function() { set('Load', false); });
     $('#enable_charging').click(function() { set('Charging', true); });
     $('#disable_charging').click(function() { set('Charging', false); });
+    $('#enable_phy_solar').click(function() { set('PhySolar', true) });
+    $('#disable_phy_solar').click(function() { set('PhySolar', false) });
+    $('#enable_phy_battery').click(function() { set('PhyBattery', true) });
+    $('#disable_phy_battery').click(function() { set('PhyBattery', false) });
+    $('#enable_phy_master').click(function() { set('PhyMaster', true) });
+    $('#disable_phy_master').click(function() { set('PhyMaster', false) });
 }
