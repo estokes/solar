@@ -176,7 +176,7 @@ pub fn send_command(
         serde_json::to_writer(writer.by_ref(), cmd.borrow())?;
         write!(writer.by_ref(), "\n")?;
         line.clear();
-        reader.read_line(&mut line).unwrap();
+        reader.read_line(&mut line)?;
         match serde_json::from_str(&line)? {
             ToClient::Ok => (),
             ToClient::Err(e) => bail!(e),
@@ -212,10 +212,10 @@ impl Iterator for Query {
 
 pub fn send_query(cfg: &Config, q: FromClient) -> Result<impl Iterator<Item = ToClient>> {
     let socket_path = cfg.control_socket();
-    let con = UnixStream::connect(&socket_path).unwrap();
+    let con = UnixStream::connect(&socket_path)?;
     let mut writer = LineWriter::new(con.try_clone()?);
     serde_json::to_writer(writer.by_ref(), &q)?;
-    write!(writer.by_ref(), "\n").unwrap();
+    write!(writer.by_ref(), "\n")?;
     Ok(Query {
         reader: BufReader::new(con),
         line: String::new(),
