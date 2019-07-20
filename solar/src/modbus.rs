@@ -16,7 +16,7 @@ pub struct Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
-        rpi.mppt_disable();
+        self.rpi.mpptc_disable();
     }
 }
 
