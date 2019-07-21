@@ -126,6 +126,10 @@ fn run_server(config: Config) {
                         let _ = reply.send(ToClient::Err(e.to_string()));
                     }
                 },
+                FromClient::DayMode => {
+                    mb.rpi_mut().mpptc_enable();
+                    let _ = reply.send(ToClient::Ok);
+                }
                 FromClient::Stop => {
                     let _ = reply.send(ToClient::Ok);
                     thread::sleep(Duration::from_millis(200));
@@ -248,6 +252,8 @@ enum SubCommand {
     Settings(Settings),
     #[structopt(name = "night", help = "night power save mode")]
     Night,
+    #[structopt(name = "day", help = "day power gen mode")]
+    Day
 }
 
 #[derive(Debug, StructOpt)]
@@ -385,6 +391,10 @@ fn main() {
                 FromClient::SetPhySolar(false),
                 FromClient::SetPhyBattery(false)
             ]).expect("failed to enter night mode")
+        }
+        SubCommand::Day => {
+            solar_client::send_command(&config, once(FromClient::DayMode))
+                .expect("failed to enter day mode")
         }
     }
 }

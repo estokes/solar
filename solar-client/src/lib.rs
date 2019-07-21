@@ -32,6 +32,7 @@ pub enum FromClient {
     TailStats,
     ReadSettings,
     WriteSettings(ps::Settings),
+    DayMode
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
