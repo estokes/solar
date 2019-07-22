@@ -32,7 +32,7 @@ pub enum FromClient {
     TailStats,
     ReadSettings,
     WriteSettings(ps::Settings),
-    DayMode
+    DayMode,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -52,23 +52,49 @@ impl fmt::Display for Phy {
     }
 }
 
+pub struct StatsV2Inner {
+    controller: ps::Stats,
+    phy: Phy,
+}
+
+impl fmt::Display for StatsV2Inner {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        self.controller.fmt(fmt)?;
+        self.phy.fmt(fmt)
+    }
+}
+
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Stats {
     V0(ps::Stats),
-    V1 { controller: ps::Stats, phy: Phy },
+    V1 {
+        controller: ps::Stats,
+        phy: Phy,
+    },
+    V2 {
+        timestamp: chrono::DateTime<chrono::offset::Local>,
+        stats: Result<StatsV2Inner, String>,
+    },
 }
 
 impl Stats {
     fn upgrade(self) -> Self {
         match self {
-            Stats::V1 { .. } => self,
-            Stats::V0(st) => Stats::V1 {
-                controller: st,
-                phy: Phy {
-                    solar: true,
-                    battery: true,
-                    master: true,
-                },
+            Stats::V2 => self,
+            Stats::V1 { controller, phy } => Stats::V2 {
+                timestamp: controller.timestamp,
+                stats: Ok(StatsV2Inner { controller, phy }),
+            },
+            Stats::V0(st) => Stats::V2 {
+                timestamp: st.timestamp,
+                stats: Ok(StatsV2Inner {
+                    controller: st,
+                    phy: Phy {
+                        solar: true,
+                        battery: true,
+                        master: true,
+                    },
+                }),
             },
         }
     }
@@ -78,7 +104,10 @@ impl Stats {
     pub fn timestamp(&self) -> chrono::DateTime<chrono::offset::Local> {
         match self {
             Stats::V0(ref s) => s.timestamp,
-            Stats::V1 {controller: ref c, ..} => c.timestamp,
+            Stats::V1 {
+                controller: ref c, ..
+            } => c.timestamp,
+            Stats::V2 { timestamp, .. } => timestamp,
         }
     }
 }
@@ -91,6 +120,7 @@ impl fmt::Display for Stats {
                 controller.fmt(fmt)?;
                 phy.fmt(fmt)
             }
+            Stats::V2 { stats, .. } => stats.fmt(fmt),
         }
     }
 }

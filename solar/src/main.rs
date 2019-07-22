@@ -127,7 +127,7 @@ fn run_server(config: Config) {
                     }
                 },
                 FromClient::DayMode => {
-                    mb.rpi_mut().mpptc_enable();
+                    let _ = mb.read_stats();
                     let _ = reply.send(ToClient::Ok);
                 }
                 FromClient::Stop => {
