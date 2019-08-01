@@ -52,6 +52,7 @@ impl fmt::Display for Phy {
     }
 }
 
+#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct StatsV2Inner {
     controller: ps::Stats,
     phy: Phy,
@@ -73,21 +74,21 @@ pub enum Stats {
     },
     V2 {
         timestamp: chrono::DateTime<chrono::offset::Local>,
-        stats: Result<StatsV2Inner, String>,
+        stats: Option<StatsV2Inner>,
     },
 }
 
 impl Stats {
     fn upgrade(self) -> Self {
         match self {
-            Stats::V2 => self,
+            Stats::V2 {..} => self,
             Stats::V1 { controller, phy } => Stats::V2 {
                 timestamp: controller.timestamp,
-                stats: Ok(StatsV2Inner { controller, phy }),
+                stats: Some(StatsV2Inner { controller, phy }),
             },
             Stats::V0(st) => Stats::V2 {
                 timestamp: st.timestamp,
-                stats: Ok(StatsV2Inner {
+                stats: Some(StatsV2Inner {
                     controller: st,
                     phy: Phy {
                         solar: true,
@@ -107,7 +108,7 @@ impl Stats {
             Stats::V1 {
                 controller: ref c, ..
             } => c.timestamp,
-            Stats::V2 { timestamp, .. } => timestamp,
+            Stats::V2 { timestamp, .. } => *timestamp,
         }
     }
 }
