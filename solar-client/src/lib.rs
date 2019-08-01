@@ -59,8 +59,8 @@ pub struct StatsV2Inner {
 
 impl fmt::Display for StatsV2Inner {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.controller.fmt(fmt)?;
-        self.phy.fmt(fmt)
+        self.controller.fmt(f)?;
+        self.phy.fmt(f)
     }
 }
 
