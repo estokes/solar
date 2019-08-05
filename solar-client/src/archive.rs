@@ -40,12 +40,14 @@ macro_rules! maxf {
 pub fn stats_accum(acc: &mut Stats, s: &Stats) {
     use std::cmp::max;
     let acc = match acc {
-        Stats::V0(ref mut s) => s,
-        Stats::V1 { controller: ref mut c, .. } => c
+        Stats::V0(ref mut s) => Some(s),
+        Stats::V1 { controller: ref mut c, .. } => Some(c),
+        Stats::V2 { stats: ref mut s, .. } => s.map(|s| &mut s.controller),
     };
     let s = match s {
-        Stats::V0(ref s) => s,
-        Stats::V1 { controller: ref c, .. } => c
+        Stats::V0(ref s) => Some(s),
+        Stats::V1 { controller: ref c, .. } => Some(c),
+        Stats::V2 { stats: ref s, .. } => s.map(|s| &s.controller)
     };
     acc.battery_v_min_daily = acc.battery_v_min_daily.min(s.battery_v_min_daily);
     acc.rts_temperature = match (acc.rts_temperature, s.rts_temperature) {
