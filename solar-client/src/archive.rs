@@ -4,6 +4,7 @@ use libflate::{
     gzip::{Decoder, EncodeOptions, Encoder},
     lz77::DefaultLz77Encoder,
 };
+use morningstar::prostar_mppt as ps;
 use std::{
     error,
     ffi::OsStr,
@@ -37,7 +38,7 @@ macro_rules! maxf {
     }
 }
 
-fn ps_stats_accum(acc: &mut ps::Stats, s: ps::Stats) {
+fn ps_stats_accum(acc: &mut ps::Stats, s: &ps::Stats) {
     use std::cmp::max;
     acc.battery_v_min_daily = acc.battery_v_min_daily.min(s.battery_v_min_daily);
     acc.rts_temperature = match (acc.rts_temperature, s.rts_temperature) {
@@ -117,11 +118,12 @@ pub fn stats_accum(acc: &mut Stats, s: &Stats) {
         | Stats::V1 { controller: ref s, .. }
         | Stats::V2 { controller: Some(ref s), .. } => {
             let acc = match acc {
-                Stats::V0(ref mut accst) => accst,
-                Stats::V1 { controller: ref mut accst, .. } => accst,
-                Stats::V2 { controller: Some(ref mut accst), .. } => accst,
+                Stats::V0(ref mut a)
+                | Stats::V1 { controller: ref mut a, .. }
+                | Stats::V2 { controller: Some(ref mut a), .. } => a,
                 Stats::V2 { ref mut controller, .. } => {
-                    *controller = *st;
+                    // there are no accumulated stats yet, so no need to aggregate them
+                    *controller = Some(*s);
                     return;
                 }
             };
