@@ -79,7 +79,6 @@ fn run_server(config: Config) {
     let mut mb = modbus::Connection::new(config.device.clone(), config.modbus_id);
     control_socket::run_server(&config, to_main);
     let mut tailing: Vec<Sender<ToClient>> = Vec::new();
-    let mut last_st: Option<ps::Stats> = None;
 
     for msg in receiver.iter() {
         match msg {
@@ -137,40 +136,40 @@ fn run_server(config: Config) {
                 }
             },
             ToMainLoop::Tick => {
-                if mb.rpi().master() && mb.rpi().battery() || last_st.is_some() {
-                    let controller = {
-                        if mb.rpi().master() && mb.rpi().battery() {
-                            last_st = Some(log_fatal!(
-                                mb.read_stats(),
-                                "fatal: failed to read stats {}",
-                                break
-                            ));
+                let phy = solar_client::Phy {
+                    solar: mb.rpi().solar(),
+                    battery: mb.rpi().battery(),
+                    master: mb.rpi().master(),
+                };
+                let controller = if !phy.master || !phy.battery {
+                    None
+                } else {
+                    match mb.read_stats() {
+                        Ok(s) => Some(s),
+                        Err(e) => {
+                            error!("reading stats failed: {}", e);
+                            None
                         }
-                        last_st.unwrap()
-                    };
-                    let phy = solar_client::Phy {
-                        solar: mb.rpi().solar(),
-                        battery: mb.rpi().battery(),
-                        master: mb.rpi().master(),
-                    };
-                    let st = Stats::V1 { controller, phy };
-                    log_fatal!(
-                        serde_json::to_writer(log.by_ref(), &st),
-                        "fatal: failed to log stats {}",
-                        break
-                    );
-                    log_fatal!(
-                        write!(log.by_ref(), "\n"),
-                        "fatal: failed to log stats {}",
-                        break
-                    );
-                    let mut i = 0;
-                    while i < tailing.len() {
-                        match tailing[i].send(ToClient::Stats(st)) {
-                            Ok(()) => i += 1,
-                            Err(_) => {
-                                tailing.remove(i);
-                            }
+                    }
+                };
+                let timestamp = chrono::Local::now();
+                let st = Stats::V2 { timestamp, controller, phy };
+                log_fatal!(
+                    serde_json::to_writer(log.by_ref(), &st),
+                    "fatal: failed to log stats {}",
+                    break
+                );
+                log_fatal!(
+                    write!(log.by_ref(), "\n"),
+                    "fatal: failed to log stats {}",
+                    break
+                );
+                let mut i = 0;
+                while i < tailing.len() {
+                    match tailing[i].send(ToClient::Stats(st)) {
+                        Ok(()) => i += 1,
+                        Err(_) => {
+                            tailing.remove(i);
                         }
                     }
                 }
@@ -253,7 +252,7 @@ enum SubCommand {
     #[structopt(name = "night", help = "night power save mode")]
     Night,
     #[structopt(name = "day", help = "day power gen mode")]
-    Day
+    Day,
 }
 
 #[derive(Debug, StructOpt)]
@@ -299,17 +298,13 @@ fn main() {
             ],
         )
         .expect("failed to set the load. Is the daemon running?"),
-        SubCommand::Charging(v) => solar_client::send_command(
-            &config,
-            once(FromClient::SetCharging(v.get())),
-        )
-        .expect("failed to disable charging. Is the daemon running?"),
+        SubCommand::Charging(v) => {
+            solar_client::send_command(&config, once(FromClient::SetCharging(v.get())))
+                .expect("failed to disable charging. Is the daemon running?")
+        }
         SubCommand::CancelFloat => solar_client::send_command(
             &config,
-            &[
-                FromClient::SetCharging(false),
-                FromClient::SetCharging(true),
-            ],
+            &[FromClient::SetCharging(false), FromClient::SetCharging(true)],
         )
         .expect("failed to cancel float"),
         SubCommand::ResetController => {
@@ -386,15 +381,12 @@ fn main() {
             solar_client::send_command(&config, once(FromClient::SetPhyMaster(v.get())))
                 .expect("failed to set physical battery")
         }
-        SubCommand::Night => {
-            solar_client::send_command(&config, &[
-                FromClient::SetPhySolar(false),
-                FromClient::SetPhyBattery(false)
-            ]).expect("failed to enter night mode")
-        }
-        SubCommand::Day => {
-            solar_client::send_command(&config, once(FromClient::DayMode))
-                .expect("failed to enter day mode")
-        }
+        SubCommand::Night => solar_client::send_command(
+            &config,
+            &[FromClient::SetPhySolar(false), FromClient::SetPhyBattery(false)],
+        )
+        .expect("failed to enter night mode"),
+        SubCommand::Day => solar_client::send_command(&config, once(FromClient::DayMode))
+            .expect("failed to enter day mode"),
     }
 }
