@@ -17,30 +17,41 @@ function set_rg_status(obj, state) {
 }
 
 function display_stats(stats) {
-    if (stats.hasOwnProperty('V1')) {
-	var phy = stats.V1.phy;
-	var stats = stats.V1.controller;
-	$('#timestamp').html(stats.timestamp);
-	$('#battery_sense_voltage').html(stats.battery_sense_voltage.toFixed(2));
-	$('#charge_current').html(stats.charge_current.toFixed(2));
-	$('#array_power').html(stats.array_power.toFixed(2));
-	$('#charge_state').html(stats.charge_state);
-	$('#load_state').html(stats.load_state);
-	$('#ah_charge_daily').html(amp_seconds_to_amp_hours(stats.ah_charge_daily).toFixed(2));
-	$('#load_state').html(stats.load_state);
-	$('#kwh_charge_total').html(jouls_to_kwh(stats.kwh_charge_total.toFixed(2)));
-	set_rg_status($('#timestamp'), Date.now() - new Date(stats.timestamp) < 60000);
-	set_rg_status(
-	    $('#load_status'),
-	    stats.load_state == 'Normal' || stats.load_state == 'LVD'
-	);
-	set_rg_status(
-	    $('#charging_status'),
-	    stats.charge_state == 'BulkMPPT'
-		|| stats.charge_state == 'Float'
-		|| stats.charge_state == 'Night'
-		|| stats.charge_state == "Absorption"
-	);
+    if (stats.hasOwnProperty('V2')) {
+	var phy = stats.V2.phy;
+	var stats = stats.V2.controller;
+        var timestamp = stats.V2.timestamp;
+	$('#timestamp').html(timestamp);
+        if(stats === null) {
+	    $('#battery_sense_voltage').html("off");
+	    $('#charge_current').html("off");
+	    $('#array_power').html("off");
+	    $('#charge_state').html("off");
+	    $('#load_state').html("off");
+        } else {
+	    $('#battery_sense_voltage').html(stats.battery_sense_voltage.toFixed(2));
+	    $('#charge_current').html(stats.charge_current.toFixed(2));
+	    $('#array_power').html(stats.array_power.toFixed(2));
+	    $('#charge_state').html(stats.charge_state);
+	    $('#load_state').html(stats.load_state);
+	    $('#ah_charge_daily').html(
+                amp_seconds_to_amp_hours(stats.ah_charge_daily).toFixed(2)
+            );
+	    $('#load_state').html(stats.load_state);
+	    $('#kwh_charge_total').html(jouls_to_kwh(stats.kwh_charge_total.toFixed(2)));
+	    set_rg_status(
+	        $('#load_status'),
+	        stats.load_state == 'Normal' || stats.load_state == 'LVD'
+	    );
+	    set_rg_status(
+	        $('#charging_status'),
+	        stats.charge_state == 'BulkMPPT'
+		    || stats.charge_state == 'Float'
+		    || stats.charge_state == 'Night'
+		    || stats.charge_state == "Absorption"
+	    );
+        }
+	set_rg_status($('#timestamp'), Date.now() - new Date(timestamp) < 60000);
 	set_rg_status($('#phy_solar'), phy.solar);
 	set_rg_status($('#phy_battery'), phy.battery);
 	set_rg_status($('#phy_master'), phy.master);
@@ -108,23 +119,25 @@ function update_charts(stats) {
     var batteryVoltage = window.chartBatteryVoltageCfg.data.datasets[0].data;
     var arrayPower = window.chartArrayPowerCfg.data.datasets[0].data;
     stats.forEach(e => {
-	var ts = new Date(e.V1.controller.timestamp);
-	chargeCurrent.push({
-	    x: ts,
-	    y: e.V1.controller.charge_current
-	});
-	ahCharge.push({
-	    x: ts,
-	    y: amp_seconds_to_amp_hours(e.V1.controller.ah_charge_daily)
-	});
-	batteryVoltage.push({
-	    x: ts,
-	    y: e.V1.controller.battery_sense_voltage
-	});
-	arrayPower.push({
-	    x: ts,
-	    y: e.V1.controller.array_power
-	});
+        if(e.V2.controller !== null) {
+	    var ts = new Date(e.V2.timestamp);
+	    chargeCurrent.push({
+	        x: ts,
+	        y: e.V2.controller.charge_current
+	    });
+	    ahCharge.push({
+	        x: ts,
+	        y: amp_seconds_to_amp_hours(e.V2.controller.ah_charge_daily)
+	    });
+	    batteryVoltage.push({
+	        x: ts,
+	        y: e.V2.controller.battery_sense_voltage
+	    });
+	    arrayPower.push({
+	        x: ts,
+	        y: e.V2.controller.array_power
+	    });
+        }
     })
     trim(chargeCurrent);
     trim(ahCharge);
@@ -142,7 +155,8 @@ function init_charts() {
     window.chartAhChargeCfg = empty_chart_config('Ah Charge', 'Ah');
     window.chartAhCharge = new Chart($('#ah_chart'), window.chartAhChargeCfg);
     window.chartBatteryVoltageCfg = empty_chart_config('Battery Voltage', 'Volts');
-    window.chartBatteryVoltage = new Chart($('#battery_voltage_chart'), window.chartBatteryVoltageCfg);
+    window.chartBatteryVoltage =
+        new Chart($('#battery_voltage_chart'), window.chartBatteryVoltageCfg);
     window.chartArrayPowerCfg = empty_chart_config('Array Power', 'Watts');
     window.chartArrayPower = new Chart($('#array_power_chart'), window.chartArrayPowerCfg);
 }
@@ -180,8 +194,12 @@ function loop() {
 	receiving_history = true;
 	con.send('{"StatsHistory": 10}');
 	init_charts();
-	stats_iid = window.setInterval(() => { if(!receiving_history) con.send('"StatsCurrent"'); }, 5000);
-	chart_iid = window.setInterval(() => { if(!receiving_history) con.send('"StatsDecimated"'); }, 540000);
+	stats_iid = window.setInterval(
+            () => { if(!receiving_history) con.send('"StatsCurrent"'); }, 5000
+        );
+	chart_iid = window.setInterval(
+            () => { if(!receiving_history) con.send('"StatsDecimated"'); }, 540000
+        );
     };
     con.onmessage = function(e) {
 	var now = Date.now();
