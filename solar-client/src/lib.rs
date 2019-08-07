@@ -53,19 +53,6 @@ impl fmt::Display for Phy {
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
-pub struct StatsV2Inner {
-    controller: ps::Stats,
-    phy: Phy,
-}
-
-impl fmt::Display for StatsV2Inner {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        self.controller.fmt(f)?;
-        self.phy.fmt(f)
-    }
-}
-
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub enum Stats {
     V0(ps::Stats),
     V1 {
@@ -74,7 +61,8 @@ pub enum Stats {
     },
     V2 {
         timestamp: chrono::DateTime<chrono::offset::Local>,
-        stats: Option<StatsV2Inner>,
+        controller: Option<ps::Stats>,
+        phy: Phy,
     },
 }
 
@@ -84,18 +72,17 @@ impl Stats {
             Stats::V2 {..} => self,
             Stats::V1 { controller, phy } => Stats::V2 {
                 timestamp: controller.timestamp,
-                stats: Some(StatsV2Inner { controller, phy }),
+                controller: Some(controller),
+                phy
             },
             Stats::V0(st) => Stats::V2 {
                 timestamp: st.timestamp,
-                stats: Some(StatsV2Inner {
-                    controller: st,
-                    phy: Phy {
-                        solar: true,
-                        battery: true,
-                        master: true,
-                    },
-                }),
+                controller: Some(st),
+                phy: Phy {
+                    solar: true,
+                    battery: true,
+                    master: true,
+                },
             },
         }
     }
@@ -108,7 +95,7 @@ impl Stats {
             Stats::V1 {
                 controller: ref c, ..
             } => c.timestamp,
-            Stats::V2 { timestamp, .. } => *timestamp,
+            Stats::V2 { ref timestamp, .. } => *timestamp,
         }
     }
 }
@@ -121,7 +108,14 @@ impl fmt::Display for Stats {
                 controller.fmt(fmt)?;
                 phy.fmt(fmt)
             }
-            Stats::V2 { stats, .. } => stats.fmt(fmt),
+            Stats::V2 { timestamp, controller, phy } => {
+                timestamp.fmt(fmt)?;
+                match controller {
+                    Some(s) => s.fmt(fmt)?,
+                    None => write!(fmt, "controller off")?,
+                }
+                phy.fmt(fmt)
+            },
         }
     }
 }

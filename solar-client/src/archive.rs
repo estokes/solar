@@ -37,18 +37,8 @@ macro_rules! maxf {
     }
 }
 
-pub fn stats_accum(acc: &mut Stats, s: &Stats) {
+fn ps_stats_accum(acc: &mut ps::Stats, s: ps::Stats) {
     use std::cmp::max;
-    let acc = match acc {
-        Stats::V0(ref mut s) => Some(s),
-        Stats::V1 { controller: ref mut c, .. } => Some(c),
-        Stats::V2 { stats: ref mut s, .. } => s.map(|s| &mut s.controller),
-    };
-    let s = match s {
-        Stats::V0(ref s) => Some(s),
-        Stats::V1 { controller: ref c, .. } => Some(c),
-        Stats::V2 { stats: ref s, .. } => s.map(|s| &s.controller)
-    };
     acc.battery_v_min_daily = acc.battery_v_min_daily.min(s.battery_v_min_daily);
     acc.rts_temperature = match (acc.rts_temperature, s.rts_temperature) {
         (None, None) => None,
@@ -120,6 +110,26 @@ pub fn stats_accum(acc: &mut Stats, s: &Stats) {
     );
 }
 
+pub fn stats_accum(acc: &mut Stats, s: &Stats) {
+    match s {
+        Stats::V2 { controller: None, .. } => (),
+        Stats::V0(ref s)
+        | Stats::V1 { controller: ref s, .. }
+        | Stats::V2 { controller: Some(ref s), .. } => {
+            let acc = match acc {
+                Stats::V0(ref mut accst) => accst,
+                Stats::V1 { controller: ref mut accst, .. } => accst,
+                Stats::V2 { controller: Some(ref mut accst), .. } => accst,
+                Stats::V2 { ref mut controller, .. } => {
+                    *controller = *st;
+                    return;
+                }
+            };
+            ps_stats_accum(acc, s);
+        }
+    }
+}
+
 pub struct Decimate<I> {
     acc: Option<(DateTime<Local>, Stats)>,
     cutoff: Duration,
@@ -159,11 +169,7 @@ pub fn decimate<I>(cutoff: Duration, iter: I) -> Decimate<I>
 where
     I: Iterator<Item = Stats>,
 {
-    Decimate {
-        cutoff,
-        iter,
-        acc: None,
-    }
+    Decimate { cutoff, iter, acc: None }
 }
 
 fn open_archive(path: &Path) -> LineWriter<Encoder<fs::File>> {
@@ -205,9 +211,7 @@ fn update_accum(
 fn close_encoder(enc: LineWriter<Encoder<fs::File>>) {
     match enc.into_inner() {
         Ok(e) => {
-            e.finish()
-                .into_result()
-                .expect("failed to close gzip stream");
+            e.finish().into_result().expect("failed to close gzip stream");
         }
         Err(_) => panic!("close encoder failed"),
     }
@@ -217,7 +221,7 @@ fn read_history_file(
     file: PathBuf,
 ) -> Result<impl Iterator<Item = Stats>, Box<dyn error::Error>> {
     use serde_json::error::Category;
-    let mut buf : BufReader<Box<dyn Read>> = io::BufReader::new({
+    let mut buf: BufReader<Box<dyn Read>> = io::BufReader::new({
         if &file == Path::new("-") {
             Box::new(io::stdin())
         } else {
@@ -235,8 +239,8 @@ fn read_history_file(
             Ok(_) => (),
             Err(e) => {
                 error!("error reading line from log file {:?}, {}", file, e);
-                return None
-            },
+                return None;
+            }
         }
         match serde_json::from_str::<Stats>(&sbuf) {
             Ok(o) => {
