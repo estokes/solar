@@ -213,8 +213,8 @@ function loop() {
 	else if (v.hasOwnProperty('CmdErr')) {
 	    console.log(v);
 	} else if (v.hasOwnProperty('Stats')) {
-	    history.push(v.Stats);
-	    if(!receiving_history) display_stats(v.Stats);
+	    if(receiving_history) history.push(v.Stats)
+            else display_stats(v.Stats);
 	} else if (v.hasOwnProperty('StatsDecimated')) {
 	    if(!receiving_history) update_charts([v.StatsDecimated]);
 	} else if (v.hasOwnProperty('Status')) {
