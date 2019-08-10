@@ -19,8 +19,8 @@ function set_rg_status(obj, state) {
 function display_stats(stats) {
     if (stats.hasOwnProperty('V2')) {
 	var phy = stats.V2.phy;
-	var stats = stats.V2.controller;
         var timestamp = stats.V2.timestamp;
+	var stats = stats.V2.controller;
 	$('#timestamp').html(timestamp);
         if(stats === null) {
 	    $('#battery_sense_voltage').html("off");
