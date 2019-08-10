@@ -69,20 +69,16 @@ pub enum Stats {
 impl Stats {
     fn upgrade(self) -> Self {
         match self {
-            Stats::V2 {..} => self,
+            Stats::V2 { .. } => self,
             Stats::V1 { controller, phy } => Stats::V2 {
                 timestamp: controller.timestamp,
                 controller: Some(controller),
-                phy
+                phy,
             },
             Stats::V0(st) => Stats::V2 {
                 timestamp: st.timestamp,
                 controller: Some(st),
-                phy: Phy {
-                    solar: true,
-                    battery: true,
-                    master: true,
-                },
+                phy: Phy { solar: true, battery: true, master: true },
             },
         }
     }
@@ -92,9 +88,7 @@ impl Stats {
     pub fn timestamp(&self) -> chrono::DateTime<chrono::offset::Local> {
         match self {
             Stats::V0(ref s) => s.timestamp,
-            Stats::V1 {
-                controller: ref c, ..
-            } => c.timestamp,
+            Stats::V1 { controller: ref c, .. } => c.timestamp,
             Stats::V2 { ref timestamp, .. } => *timestamp,
         }
     }
@@ -115,7 +109,7 @@ impl fmt::Display for Stats {
                     None => write!(fmt, "controller off")?,
                 }
                 phy.fmt(fmt)
-            },
+            }
         }
     }
 }
@@ -206,10 +200,7 @@ impl Config {
 
     fn archive_for_date_pfx(&self, date: Date<Local>, pfx: &str) -> PathBuf {
         let d = date.format("%Y%m%d");
-        cat_paths(
-            &self.archive_directory,
-            format!("solar.log-{}{}.gz", d, pfx),
-        )
+        cat_paths(&self.archive_directory, format!("solar.log-{}{}.gz", d, pfx))
     }
 
     pub fn archive_for_date(&self, date: Date<Local>) -> ArchivedDay {
@@ -289,8 +280,5 @@ pub fn send_query(cfg: &Config, q: FromClient) -> Result<impl Iterator<Item = To
     let mut writer = LineWriter::new(con.try_clone()?);
     serde_json::to_writer(writer.by_ref(), &q)?;
     write!(writer.by_ref(), "\n")?;
-    Ok(Query {
-        reader: BufReader::new(con),
-        line: String::new(),
-    })
+    Ok(Query { reader: BufReader::new(con), line: String::new() })
 }

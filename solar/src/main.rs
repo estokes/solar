@@ -53,6 +53,13 @@ fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
 }
 
 fn open_log(cfg: &Config) -> Result<LineWriter<fs::File>, io::Error> {
+    match fs::metadata(&cfg.run_directory) {
+        Ok(_) => (),
+        Err(e) => match e.kind() {
+            io::ErrorKind::NotFound => fs::create_dir_all(&cfg.run_directory)?,
+            _ => return Err(e),
+        },
+    }
     let log = fs::OpenOptions::new()
         .write(true)
         .append(true)
