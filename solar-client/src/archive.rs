@@ -328,18 +328,21 @@ pub fn read_history(cfg: &Config, mut days: i64) -> impl Iterator<Item = Stats> 
         } else {
             let d = Duration::days(days);
             days -= 1;
-            today
-                .checked_sub_signed(d)
-                .map(|d| cfg.archive_for_date(d).ten_minute_averages)
-                .and_then(|f| match read_history_file(f.clone()) {
-                    Ok(i) => Some(i),
-                    Err(e) => {
-                        error!("error opening log archive, skipping: {:?}, {}", f, e);
-                        None
-                    }
-                })
+            Some(
+                today
+                    .checked_sub_signed(d)
+                    .map(|d| cfg.archive_for_date(d).ten_minute_averages)
+                    .and_then(|f| match read_history_file(f.clone()) {
+                        Ok(i) => Some(i),
+                        Err(e) => {
+                            error!("error opening log archive, skipping: {:?}, {}", f, e);
+                            None
+                        }
+                    }),
+            )
         }
     })
+    .flatten()
     .flatten()
     .chain(
         match read_history_file(cfg.log_file()) {
