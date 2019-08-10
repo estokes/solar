@@ -83,10 +83,6 @@ function empty_chart_config(label, unit) {
 		mode: 'index',
 		intersect: false,
 	    },
-	    hover: {
-		mode: 'nearest',
-		intersect: true
-	    },
 	    scales: {
 		xAxes: [{
 		    type: 'time',
