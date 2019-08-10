@@ -53,13 +53,6 @@ fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
 }
 
 fn open_log(cfg: &Config) -> Result<LineWriter<fs::File>, io::Error> {
-    match fs::metadata(&cfg.run_directory) {
-        Ok(_) => (),
-        Err(e) => match e.kind() {
-            io::ErrorKind::NotFound => fs::create_dir_all(&cfg.run_directory)?,
-            _ => return Err(e),
-        },
-    }
     let log = fs::OpenOptions::new()
         .write(true)
         .append(true)
@@ -274,6 +267,15 @@ struct Options {
 fn main() {
     let opt = Options::from_args();
     let config = solar_client::load_config(Some(&opt.config));
+    match fs::metadata(&config.run_directory) {
+        Ok(_) => (),
+        Err(e) => match e.kind() {
+            io::ErrorKind::NotFound => {
+                fs::create_dir_all(&config.run_directory).expect("failed to open rundir")
+            }
+            _ => panic!("failed to open rundir {}", e),
+        },
+    }
     use std::iter::once;
     match opt.cmd {
         SubCommand::Start { daemonize } => {
