@@ -114,20 +114,22 @@ fn ps_stats_accum(acc: &mut ps::Stats, s: &ps::Stats) {
 pub fn stats_accum(acc: &mut Stats, s: &Stats) {
     match s {
         Stats::V2 { controller: None, .. } => (),
-        Stats::V0(ref s)
-        | Stats::V1 { controller: ref s, .. }
-        | Stats::V2 { controller: Some(ref s), .. } => {
-            let acc = match acc {
+        Stats::V0(ref cs)
+        | Stats::V1 { controller: ref cs, .. }
+        | Stats::V2 { controller: Some(ref cs), .. } => {
+            let ps_acc = match acc {
                 Stats::V0(ref mut a)
                 | Stats::V1 { controller: ref mut a, .. }
                 | Stats::V2 { controller: Some(ref mut a), .. } => a,
-                Stats::V2 { ref mut controller, .. } => {
+                Stats::V2 { ref mut timestamp, ref mut controller, .. } => {
                     // there are no accumulated stats yet, so no need to aggregate them
-                    *controller = Some(*s);
+                    *controller = Some(*cs);
+                    *timestamp = s.timestamp();
                     return;
                 }
             };
-            ps_stats_accum(acc, s);
+            ps_stats_accum(ps_acc, cs);
+            *acc.timestamp_mut() = s.timestamp();
         }
     }
 }

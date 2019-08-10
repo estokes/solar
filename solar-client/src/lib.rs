@@ -82,14 +82,20 @@ impl Stats {
             },
         }
     }
-}
 
-impl Stats {
     pub fn timestamp(&self) -> chrono::DateTime<chrono::offset::Local> {
         match self {
             Stats::V0(ref s) => s.timestamp,
             Stats::V1 { controller: ref c, .. } => c.timestamp,
             Stats::V2 { ref timestamp, .. } => *timestamp,
+        }
+    }
+
+    pub fn timestamp_mut(&mut self) -> &mut chrono::DateTime<chrono::offset::Local> {
+        match self {
+            Stats::V0(ref mut s) => &mut s.timestamp,
+            Stats::V1 { controller: ref mut c, .. } => &mut c.timestamp,
+            Stats::V2 { ref mut timestamp, .. } => timestamp,
         }
     }
 }
