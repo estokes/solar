@@ -251,20 +251,26 @@ fn read_history_file(
                 sbuf.clear();
                 Some(o.upgrade())
             }
-            Err(e) => {
-                match e.classify() {
-                    Category::Io | Category::Eof => (),
-                    Category::Syntax => error!(
-                        "syntax error in log archive, parsing terminated: {:?}, {}",
-                        file, e
-                    ),
-                    Category::Data => error!(
-                        "semantic error in log archive, parsing terminated: {:?}, {}",
-                        file, e
-                    ),
-                };
-                None
-            }
+            Err(e) => match serde_json::from_str::<ps::Stats>(&sbuf) {
+                Ok(o) => {
+                    sbuf.clear();
+                    Some(Stats::V0(o).upgrade())
+                }
+                Err(_) => {
+                    match e.classify() {
+                        Category::Io | Category::Eof => (),
+                        Category::Syntax => error!(
+                            "syntax error in log archive, parsing terminated: {:?}, {}",
+                            file, e
+                        ),
+                        Category::Data => error!(
+                            "semantic error in log archive, parsing terminated: {:?}, {}",
+                            file, e
+                        ),
+                    };
+                    None
+                }
+            },
         }
     }))
 }
@@ -278,6 +284,7 @@ fn do_archive_log_file(file: PathBuf, archive: &ArchivedDay) {
     let mut acc_1m: Option<(DateTime<Local>, Stats)> = None;
     let mut acc_10m: Option<(DateTime<Local>, Stats)> = None;
     for s in read_history_file(file).expect("failed to open archive file") {
+        println!("read {}", s);
         acc_1m = update_accum(acc_1m, s, one_minute, &mut enc_1m);
         acc_10m = update_accum(acc_10m, s, ten_minutes, &mut enc_10m);
         serde_json::to_writer(enc.by_ref(), &s).expect("failed to encode");
