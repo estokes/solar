@@ -188,7 +188,7 @@ function loop() {
     con.onopen = function() {
 	$('#status').text('Loading History');
 	receiving_history = true;
-	con.send('{"StatsHistory": 10}');
+	con.send('{"StatsHistory": 3}');
 	init_charts();
 	stats_iid = window.setInterval(
             () => { if(!receiving_history) con.send('"StatsCurrent"'); }, 5000
