@@ -3,7 +3,7 @@ extern crate serde_derive;
 #[macro_use]
 extern crate log;
 use actix::prelude::*;
-use actix_files;
+use actix_identity::{CookieIdentityPolicy, Identity, IdentityService};
 use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
 use chrono::{prelude::*, Duration};
@@ -124,9 +124,19 @@ impl StreamHandler<ws::Message, ws::ProtocolError> for ControlSocket {
     }
 }
 
-fn control_socket(r: HttpRequest, stream: web::Payload) -> Result<HttpResponse, Error> {
-    let d = r.app_data::<AppData>().unwrap();
-    ws::start(ControlSocket(d.clone()), &r, stream)
+fn control_socket(
+    r: HttpRequest,
+    id: Identity,
+    d: web::Data<AppData>,
+    stream: web::Payload,
+) -> Result<HttpResponse, Error> {
+    match id.identity() {
+        None => Ok(HttpResponse::Unauthorized().finish()),
+        Some(_) => {
+            //let d = r.app_data::<AppData>().unwrap();
+            ws::start(ControlSocket(d.get_ref().clone()), &r, stream)
+        }
+    }
 }
 
 fn read_stats(appdata: AppData) {
@@ -172,25 +182,57 @@ fn read_stats(appdata: AppData) {
     });
 }
 
+#[derive(Debug, Deserialize)]
+struct LoginParams {
+    user: String,
+    password: String,
+}
+
+fn handle_login(
+    id: Identity,
+    params: web::Form<LoginParams>,
+) -> Result<HttpResponse, Error> {
+    info!("login from: {:?}", params);
+    id.remember(params.user.clone());
+    Ok(HttpResponse::Found().header("LOCATION", "/").finish())
+}
+
+macro_rules! inc {
+    ($name:expr, $file:expr) => {
+        web::resource($name).route(web::get().to(|id: Identity| {
+            match id.identity() {
+                None => HttpResponse::Found().header("LOCATION", "/login").finish(),
+                Some(_) => HttpResponse::Ok()
+                    .content_type("text/html; charset=utf-8")
+                    .body(include_str!($file)),
+            }
+        }))
+    };
+}
+
 fn main() -> std::io::Result<()> {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
     info!("starting server");
     HttpServer::new(|| {
-        let appdata = AppData {
-            stats: Arc::new(RwLock::new(None)),
-            config: load_config(None),
-        };
+        let appdata =
+            AppData { stats: Arc::new(RwLock::new(None)), config: load_config(None) };
         read_stats(appdata.clone());
         App::new()
             .data(appdata)
             .wrap(middleware::Logger::default())
-            .service(web::resource("/").route(web::get().to(|| {
-                HttpResponse::Found()
-                    .header("LOCATION", "/static/index.html")
-                    .finish()
-            })))
-            .service(actix_files::Files::new("/static/", "./static/"))
+            .wrap(IdentityService::new(
+                CookieIdentityPolicy::new(&[0; 32]).name("auth-cookie").secure(false),
+            ))
+            .service(inc!("/", "../static/index.html"))
+            .service(inc!("/Chart.bundle.min.js", "../static/Chart.bundle.min.js"))
+            .service(inc!("/jquery-3.4.1.min.js", "../static/jquery-3.4.1.min.js"))
+            .service(inc!("/ui.css", "../static/ui.css"))
+            .service(inc!("/ui.js", "../static/ui.js"))
+            .service(
+                inc!("/login", "../static/login.html")
+                    .route(web::post().to(handle_login)),
+            )
             .service(web::resource("/ws/").route(web::get().to(control_socket)))
     })
     .bind("0.0.0.0:8080")?
