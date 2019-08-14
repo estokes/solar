@@ -198,11 +198,9 @@ fn handle_login(
 }
 
 macro_rules! inc {
-    ($name:expr, $file:expr, $auth:expr) => {
+    ($name:expr, $file:expr, $auth:expr, $ctyp:expr) => {
         web::resource($name).route(web::get().to(|id: Identity| {
-            let resp = HttpResponse::Ok()
-                .content_type("text/html; charset=utf-8")
-                .body(include_str!($file));
+            let resp = HttpResponse::Ok().content_type($ctyp).body(include_str!($file));
             if !$auth {
                 resp
             } else {
@@ -212,6 +210,9 @@ macro_rules! inc {
                 }
             }
         }))
+    };
+    ($name:expr, $file:expr) => {
+        inc!($name, $file, true, "text/html; charset=utf-8")
     };
 }
 
@@ -229,13 +230,28 @@ fn main() -> std::io::Result<()> {
             .wrap(IdentityService::new(
                 CookieIdentityPolicy::new(&[0; 32]).name("auth-cookie").secure(false),
             ))
-            .service(inc!("/", "../static/index.html", true))
-            .service(inc!("/Chart.bundle.min.js", "../static/Chart.bundle.min.js", true))
-            .service(inc!("/jquery-3.4.1.min.js", "../static/jquery-3.4.1.min.js", true))
-            .service(inc!("/ui.css", "../static/ui.css", true))
-            .service(inc!("/ui.js", "../static/ui.js", true))
+            .service(inc!("/", "../static/index.html"))
+            .service(inc!(
+                "/Chart.bundle.min.js",
+                "../static/Chart.bundle.min.js",
+                true,
+                "text/javascript; charset=utf-8"
+            ))
+            .service(inc!(
+                "/jquery-3.4.1.min.js",
+                "../static/jquery-3.4.1.min.js",
+                true,
+                "text/javascript; charset=utf-8"
+            ))
+            .service(inc!("/ui.css", "../static/ui.css", true, "text/css; charset=utf-8"))
+            .service(inc!(
+                "/ui.js",
+                "../static/ui.js",
+                true,
+                "text/javascript; charset=utf-8"
+            ))
             .service(
-                inc!("/login", "../static/login.html", false)
+                inc!("/login", "../static/login.html", false, "text/html; charset=utf-8")
                     .route(web::post().to(handle_login)),
             )
             .service(web::resource("/ws/").route(web::get().to(control_socket)))
