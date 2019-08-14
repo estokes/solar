@@ -203,7 +203,7 @@ macro_rules! inc {
             let resp = HttpResponse::Ok()
                 .content_type("text/html; charset=utf-8")
                 .body(include_str!($file));
-            if !auth {
+            if !$auth {
                 resp
             } else {
                 match id.identity() {
