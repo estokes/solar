@@ -198,13 +198,18 @@ fn handle_login(
 }
 
 macro_rules! inc {
-    ($name:expr, $file:expr) => {
+    ($name:expr, $file:expr, $auth:expr) => {
         web::resource($name).route(web::get().to(|id: Identity| {
-            match id.identity() {
-                None => HttpResponse::Found().header("LOCATION", "/login").finish(),
-                Some(_) => HttpResponse::Ok()
-                    .content_type("text/html; charset=utf-8")
-                    .body(include_str!($file)),
+            let resp = HttpResponse::Ok()
+                .content_type("text/html; charset=utf-8")
+                .body(include_str!($file));
+            if !auth {
+                resp
+            } else {
+                match id.identity() {
+                    None => HttpResponse::Found().header("LOCATION", "/login").finish(),
+                    Some(_) => resp,
+                }
             }
         }))
     };
@@ -224,13 +229,13 @@ fn main() -> std::io::Result<()> {
             .wrap(IdentityService::new(
                 CookieIdentityPolicy::new(&[0; 32]).name("auth-cookie").secure(false),
             ))
-            .service(inc!("/", "../static/index.html"))
-            .service(inc!("/Chart.bundle.min.js", "../static/Chart.bundle.min.js"))
-            .service(inc!("/jquery-3.4.1.min.js", "../static/jquery-3.4.1.min.js"))
-            .service(inc!("/ui.css", "../static/ui.css"))
-            .service(inc!("/ui.js", "../static/ui.js"))
+            .service(inc!("/", "../static/index.html", true))
+            .service(inc!("/Chart.bundle.min.js", "../static/Chart.bundle.min.js", true))
+            .service(inc!("/jquery-3.4.1.min.js", "../static/jquery-3.4.1.min.js", true))
+            .service(inc!("/ui.css", "../static/ui.css", true))
+            .service(inc!("/ui.js", "../static/ui.js", true))
             .service(
-                inc!("/login", "../static/login.html")
+                inc!("/login", "../static/login.html", false)
                     .route(web::post().to(handle_login)),
             )
             .service(web::resource("/ws/").route(web::get().to(control_socket)))
