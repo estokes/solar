@@ -202,7 +202,7 @@ fn handle_login(
             fail()
         }
         Ok(mut auth) => {
-            auth.get_handler().set_credentials(params.user, params.password);
+            auth.get_handler().set_credentials(&params.user, &params.password);
             match auth.authenticate() {
                 Err(_) => fail(),
                 Ok(()) => {
