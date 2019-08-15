@@ -134,7 +134,6 @@ fn control_socket(
     d: web::Data<AppData>,
     stream: web::Payload,
 ) -> Result<HttpResponse, Error> {
-    info!("{:?}", r);
     match id.identity() {
         None => Ok(HttpResponse::Unauthorized().finish()),
         Some(_) => ws::start(ControlSocket(d.get_ref().clone()), &r, stream),
