@@ -194,8 +194,24 @@ fn handle_login(
     id: Identity,
     params: web::Form<LoginParams>,
 ) -> Result<HttpResponse, Error> {
-    id.remember(params.user.clone());
-    Ok(HttpResponse::Found().header("LOCATION", "/").finish())
+    use pam::Authenticator;
+    let fail = || Ok(HttpResponse::Found().header("LOCATION", "/login-failed").finish());
+    match Authenticator::with_password("system-auth") {
+        Err(e) => {
+            error!("failed to create authenticator {}", e);
+            fail()
+        }
+        Ok(mut auth) => {
+            auth.get_handler().set_credentials(params.user, params.password);
+            match auth.authenticate() {
+                Err(_) => fail(),
+                Ok(()) => {
+                    id.remember(params.user.clone());
+                    Ok(HttpResponse::Found().header("LOCATION", "/").finish())
+                }
+            }
+        }
+    }
 }
 
 macro_rules! inc {
@@ -274,6 +290,12 @@ fn main() -> std::io::Result<()> {
                 inc!("/login", "../static/login.html", false, "text/html; charset=utf-8")
                     .route(web::post().to(handle_login)),
             )
+            .service(inc!(
+                "/login-failed",
+                "../static/login-failed.html",
+                false,
+                "text/html; charset=utf-8"
+            ))
             .service(web::resource("/ws/").route(web::get().to(control_socket)))
     })
     .bind_rustls("0.0.0.0:8443", config)?
