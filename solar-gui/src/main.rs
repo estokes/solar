@@ -7,14 +7,14 @@ use actix_identity::{CookieIdentityPolicy, Identity, IdentityService};
 use actix_web::{middleware, web, App, Error, HttpRequest, HttpResponse, HttpServer};
 use actix_web_actors::ws;
 use chrono::{prelude::*, Duration};
+use rustls::internal::pemfile::{certs, pkcs8_private_keys};
+use rustls::{NoClientAuth, ServerConfig};
 use solar_client::{
     archive, load_config, send_command, send_query, Config, FromClient, Stats, ToClient,
 };
-use rustls::internal::pemfile::{certs, rsa_private_keys};
-use rustls::{NoClientAuth, ServerConfig};
 use std::{
-    io::BufReader,
     fs::File,
+    io::BufReader,
     iter,
     sync::{Arc, RwLock},
     thread,
@@ -136,10 +136,7 @@ fn control_socket(
 ) -> Result<HttpResponse, Error> {
     match id.identity() {
         None => Ok(HttpResponse::Unauthorized().finish()),
-        Some(_) => {
-            //let d = r.app_data::<AppData>().unwrap();
-            ws::start(ControlSocket(d.get_ref().clone()), &r, stream)
-        }
+        Some(_) => ws::start(ControlSocket(d.get_ref().clone()), &r, stream),
     }
 }
 
@@ -235,11 +232,15 @@ fn main() -> std::io::Result<()> {
     env_logger::init();
     info!("starting server");
     let mut config = ServerConfig::new(NoClientAuth::new());
-    let cert_file = &mut BufReader::new(File::open("cert.pem").unwrap());
-    let key_file = &mut BufReader::new(File::open("key.pem").unwrap());
-    let cert_chain = certs(cert_file).unwrap();
-    let mut keys = rsa_private_keys(key_file).unwrap();
-    config.set_single_cert(cert_chain, keys.remove(0)).unwrap();
+    let cert_file =
+        &mut BufReader::new(File::open("cert.pem").expect("failed to open certificate"));
+    let key_file =
+        &mut BufReader::new(File::open("key.pem").expect("failed to open private key"));
+    let cert_chain = certs(cert_file).expect("failed to read certificate");
+    let mut keys = pkcs8_private_keys(key_file).expect("failed to read private key");
+    config
+        .set_single_cert(cert_chain, keys.pop().expect("no private key found"))
+        .expect("failed to configure rustls");
     HttpServer::new(|| {
         let appdata =
             AppData { stats: Arc::new(RwLock::new(None)), config: load_config(None) };
