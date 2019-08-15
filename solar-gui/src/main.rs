@@ -220,6 +220,16 @@ macro_rules! inc {
     };
 }
 
+fn cookie_key() -> [u8; 512] {
+    use rand::prelude::*;
+    let mut a = [0; 512];
+    let mut rng = rand::thread_rng();
+    for i in 0..512 {
+        a[i] = rng.gen();
+    }
+    a
+}
+
 fn main() -> std::io::Result<()> {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
@@ -238,7 +248,7 @@ fn main() -> std::io::Result<()> {
             .data(appdata)
             .wrap(middleware::Logger::default())
             .wrap(IdentityService::new(
-                CookieIdentityPolicy::new(&[0; 32]).name("auth-cookie").secure(false),
+                CookieIdentityPolicy::new(&cookie_key()).name("auth-cookie").secure(true),
             ))
             .service(inc!("/", "../static/index.html"))
             .service(inc!(
