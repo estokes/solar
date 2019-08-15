@@ -182,7 +182,7 @@ function loop() {
     };
 
     if(con != null) return;
-    else con = new WebSocket('ws://' + window.location.host + '/ws/');
+    else con = new WebSocket('wss://' + window.location.host + '/ws/');
     
     $('#status').text('Connecting');
     con.onopen = function() {
