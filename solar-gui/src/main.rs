@@ -194,7 +194,6 @@ fn handle_login(
     id: Identity,
     params: web::Form<LoginParams>,
 ) -> Result<HttpResponse, Error> {
-    info!("login from: {:?}", params);
     id.remember(params.user.clone());
     Ok(HttpResponse::Found().header("LOCATION", "/").finish())
 }
