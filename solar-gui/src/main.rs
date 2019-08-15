@@ -134,6 +134,7 @@ fn control_socket(
     d: web::Data<AppData>,
     stream: web::Payload,
 ) -> Result<HttpResponse, Error> {
+    info!("{:?}", r);
     match id.identity() {
         None => Ok(HttpResponse::Unauthorized().finish()),
         Some(_) => ws::start(ControlSocket(d.get_ref().clone()), &r, stream),
@@ -217,16 +218,6 @@ macro_rules! inc {
     };
 }
 
-fn cookie_key() -> [u8; 512] {
-    use rand::prelude::*;
-    let mut a = [0; 512];
-    let mut rng = rand::thread_rng();
-    for i in 0..512 {
-        a[i] = rng.gen();
-    }
-    a
-}
-
 fn main() -> std::io::Result<()> {
     std::env::set_var("RUST_LOG", "info");
     env_logger::init();
@@ -241,7 +232,16 @@ fn main() -> std::io::Result<()> {
     config
         .set_single_cert(cert_chain, keys.pop().expect("no private key found"))
         .expect("failed to configure rustls");
-    HttpServer::new(|| {
+    let cookie_key = {
+        use rand::prelude::*;
+        let mut a = [0; 512];
+        let mut rng = rand::thread_rng();
+        for i in 0..512 {
+            a[i] = rng.gen();
+        }
+        a
+    };
+    HttpServer::new(move || {
         let appdata =
             AppData { stats: Arc::new(RwLock::new(None)), config: load_config(None) };
         read_stats(appdata.clone());
@@ -249,7 +249,7 @@ fn main() -> std::io::Result<()> {
             .data(appdata)
             .wrap(middleware::Logger::default())
             .wrap(IdentityService::new(
-                CookieIdentityPolicy::new(&cookie_key()).name("auth-cookie").secure(true),
+                CookieIdentityPolicy::new(&cookie_key).name("auth-cookie").secure(true),
             ))
             .service(inc!("/", "../static/index.html"))
             .service(inc!(
