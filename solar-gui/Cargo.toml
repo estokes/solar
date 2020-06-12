@@ -16,7 +16,7 @@ actix-web-actors = "1.0"
 actix-identity = "0.1"
 pam = "0.7"
 solar-client = {path = "../solar-client"}
-morningstar = "0.2"
+morningstar = { path = "../../morningstar" }
 env_logger = "0.6"
 libflate = "0.1"
 flate2 = "1.0"

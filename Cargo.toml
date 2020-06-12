@@ -1,2 +1,2 @@
 [workspace]
-members = ["solar", "solar-client", "solar-gui"]
+members = ["solar", "solar-client"]

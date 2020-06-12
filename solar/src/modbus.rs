@@ -2,9 +2,9 @@ use crate::rpi::Rpi;
 use morningstar::{error as mse, prostar_mppt as ps};
 use std::{
     ops::Drop,
-    thread::sleep,
     time::{Duration, Instant},
 };
+use tokio::{task, time};
 
 pub struct Connection {
     rpi: Rpi,
@@ -21,20 +21,16 @@ impl Drop for Connection {
 }
 
 impl Connection {
-    pub fn new(device: String, address: u8) -> Self {
-        let mut rpi = log_fatal!(
-            Rpi::new(),
-            "failed to init gpio {}",
-            panic!("failed to init gpio")
-        );
-        rpi.mpptc_enable();
-        Connection {
-            rpi,
-            con: None,
-            device,
-            address,
-            last_command: Instant::now(),
-        }
+    pub async fn new(device: String, address: u8) -> Self {
+        task::spawn_blocking(move || {
+            let mut rpi = log_fatal!(
+                Rpi::new(),
+                "failed to init gpio {}",
+                panic!("failed to init gpio")
+            );
+            rpi.mpptc_enable();
+            Connection { rpi, con: None, device, address, last_command: Instant::now() }
+        })
     }
 
     fn get_con(&mut self) -> mse::Result<&ps::Connection> {
@@ -79,17 +75,17 @@ impl Connection {
         }
     }
 
-    fn wait_for_throttle(&mut self) {
+    async fn wait_for_throttle(&mut self) {
         let throttle = Duration::from_secs(1);
         let now = Instant::now();
         let elapsed = now - self.last_command;
         if elapsed < throttle {
-            sleep(throttle - elapsed)
+            time::delay_for(throttle - elapsed).await
         }
         self.last_command = now;
     }
 
-    pub fn write_coil(&mut self, coil: ps::Coil, bit: bool) -> mse::Result<()> {
+    pub async fn write_coil(&mut self, coil: ps::Coil, bit: bool) -> mse::Result<()> {
         self.wait_for_throttle();
         match (coil, bit) {
             (ps::Coil::ResetControl, true) => {
