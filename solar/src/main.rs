@@ -21,18 +21,20 @@ mod control_socket;
 mod modbus;
 mod rpi;
 
-use daemonize::Daemonize;
-use morningstar::prostar_mppt as ps;
 use anyhow::Result;
+use daemonize::Daemonize;
+use futures::{prelude::*, select_biased};
+use morningstar::prostar_mppt as ps;
 use solar_client::{self, archive, Config, FromClient, Stats, ToClient};
-use tokio::sync::mpsc::{channel, Sender};
-use std::{
-    fs,
-    io::{self, LineWriter, Write},
-    thread,
-    time::Duration,
-};
+use std::time::Duration;
 use structopt::StructOpt;
+use tokio::{
+    fs, io,
+    prelude::*,
+    runtime::Runtime,
+    sync::mpsc::{channel, Sender},
+    time,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) enum ToMainLoop {
@@ -40,54 +42,53 @@ pub(crate) enum ToMainLoop {
     Tick,
 }
 
-fn ticker(cfg: &Config, to_main: Sender<ToMainLoop>) {
-    let interval = Duration::from_millis(cfg.stats_interval);
-    thread::Builder::new()
-        .name("ticker".into())
-        .stack_size(256)
-        .spawn(move || loop {
-            let _ = to_main.send(ToMainLoop::Tick);
-            thread::sleep(interval);
-        })
-        .unwrap();
-}
-
-fn open_log(cfg: &Config) -> Result<LineWriter<fs::File>, io::Error> {
+async fn open_log(cfg: &Config) -> Result<io::BufWriter<fs::File>, io::Error> {
     let log = fs::OpenOptions::new()
         .write(true)
         .append(true)
         .create(true)
-        .open(&cfg.log_file())?;
-    Ok(LineWriter::new(log))
+        .open(&cfg.log_file())
+        .await?;
+    Ok(io::BufWriter::new(log))
 }
 
-fn send_reply(r: mse::Result<()>, s: Sender<ToClient>) {
+async fn send_reply(r: Result<()>, mut s: Sender<ToClient>) {
     match r {
         Ok(()) => {
-            let _ = s.send(ToClient::Ok);
+            let _ = s.send(ToClient::Ok).await;
         }
         Err(e) => {
-            let _ = s.send(ToClient::Err(e.to_string()));
+            let _ = s.send(ToClient::Err(e.to_string())).await;
         }
     }
 }
 
-fn run_server(config: Config) {
-    let (to_main, receiver) = channel();
-    ticker(&config, to_main.clone());
-    let mut log = log_fatal!(open_log(&config), "failed to open log {}", return);
+async fn run_server(config: Config) {
+    let (to_main, receiver) = channel(100);
+    let mut receiver = receiver.fuse();
+    let mut log = log_fatal!(open_log(&config).await, "failed to open log {}", return);
     let mut mb = modbus::Connection::new(config.device.clone(), config.modbus_id);
+    let mut tick = time::interval(Duration::from_secs(config.stats_interval)).fuse();
     control_socket::run_server(&config, to_main);
     let mut tailing: Vec<Sender<ToClient>> = Vec::new();
-
-    for msg in receiver.iter() {
+    let mut statsbuf = Vec::new();
+    loop {
+        let msg = select_biased! {
+            _ = tick.next() => ToMainLoop::Tick,
+            m = receiver.next() => match m {
+                None => break,
+                Some(m) => m
+            }
+        };
         match msg {
-            ToMainLoop::FromClient(msg, reply) => match msg {
+            ToMainLoop::FromClient(msg, mut reply) => match msg {
                 FromClient::SetCharging(b) => {
-                    send_reply(mb.write_coil(ps::Coil::ChargeDisconnect, !b), reply)
+                    send_reply(mb.write_coil(ps::Coil::ChargeDisconnect, !b).await, reply)
+                        .await
                 }
                 FromClient::SetLoad(b) => {
-                    send_reply(mb.write_coil(ps::Coil::LoadDisconnect, !b), reply)
+                    send_reply(mb.write_coil(ps::Coil::LoadDisconnect, !b).await, reply)
+                        .await
                 }
                 FromClient::SetPhySolar(b) => {
                     mb.rpi_mut().set_solar(b);
@@ -107,31 +108,36 @@ fn run_server(config: Config) {
                     }
                 }
                 FromClient::ResetController => {
-                    send_reply(mb.write_coil(ps::Coil::ResetControl, true), reply)
+                    send_reply(mb.write_coil(ps::Coil::ResetControl, true).await, reply)
+                        .await
                 }
                 FromClient::LogRotated => {
-                    log = log_fatal!(open_log(&config), "failed to open log {}", break);
-                    send_reply(Ok(()), reply)
+                    log = log_fatal!(
+                        open_log(&config).await,
+                        "failed to open log {}",
+                        break
+                    );
+                    send_reply(Ok(()), reply).await
                 }
                 FromClient::TailStats => tailing.push(reply),
                 FromClient::WriteSettings(settings) => {
-                    send_reply(mb.write_settings(&settings), reply)
+                    send_reply(mb.write_settings(&settings).await, reply).await
                 }
-                FromClient::ReadSettings => match mb.read_settings() {
+                FromClient::ReadSettings => match mb.read_settings().await {
                     Ok(s) => {
-                        let _ = reply.send(ToClient::Settings(s));
+                        let _ = reply.send(ToClient::Settings(s)).await;
                     }
                     Err(e) => {
-                        let _ = reply.send(ToClient::Err(e.to_string()));
+                        let _ = reply.send(ToClient::Err(e.to_string())).await;
                     }
                 },
                 FromClient::DayMode => {
-                    let _ = mb.read_stats();
-                    let _ = reply.send(ToClient::Ok);
+                    let _ = mb.read_stats().await;
+                    let _ = reply.send(ToClient::Ok).await;
                 }
                 FromClient::Stop => {
-                    let _ = reply.send(ToClient::Ok);
-                    thread::sleep(Duration::from_millis(200));
+                    let _ = reply.send(ToClient::Ok).await;
+                    time::delay_for(Duration::from_millis(200)).await;
                     break;
                 }
             },
@@ -144,7 +150,7 @@ fn run_server(config: Config) {
                 let controller = if !phy.master || !phy.battery {
                     None
                 } else {
-                    match mb.read_stats() {
+                    match mb.read_stats().await {
                         Ok(s) => Some(s),
                         Err(e) => {
                             error!("reading stats failed: {}", e);
@@ -154,19 +160,21 @@ fn run_server(config: Config) {
                 };
                 let timestamp = chrono::Local::now();
                 let st = Stats::V2 { timestamp, controller, phy };
+                statsbuf.clear();
                 log_fatal!(
-                    serde_json::to_writer(log.by_ref(), &st),
-                    "fatal: failed to log stats {}",
+                    serde_json::to_writer(&mut statsbuf, &st),
+                    "fatal: failed to format stats {}",
                     break
                 );
+                statsbuf.push(b'\n');
                 log_fatal!(
-                    write!(log.by_ref(), "\n"),
+                    log.write_all(&statsbuf).await,
                     "fatal: failed to log stats {}",
                     break
                 );
                 let mut i = 0;
                 while i < tailing.len() {
-                    match tailing[i].send(ToClient::Stats(st)) {
+                    match tailing[i].send(ToClient::Stats(st)).await {
                         Ok(()) => i += 1,
                         Err(_) => {
                             tailing.remove(i);
@@ -265,6 +273,7 @@ struct Options {
 }
 
 fn main() {
+    use std::fs;
     let opt = Options::from_args();
     let config = solar_client::load_config(Some(&opt.config));
     match fs::metadata(&config.run_directory) {
@@ -288,12 +297,12 @@ fn main() {
                 .expect("failed to init syslog");
                 let d = Daemonize::new().pid_file(&config.pid_file());
                 match d.start() {
-                    Ok(()) => run_server(config),
+                    Ok(()) => Runtime::new().unwrap().block_on(run_server(config)),
                     Err(e) => panic!("failed to daemonize: {}", e),
                 }
             } else {
                 simple_logger::init().expect("failed to init simple logger");
-                run_server(config)
+                Runtime::new().unwrap().block_on(run_server(config))
             }
         }
         SubCommand::Stop => solar_client::send_command(&config, once(FromClient::Stop))

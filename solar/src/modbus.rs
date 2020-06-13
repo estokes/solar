@@ -1,14 +1,11 @@
 use crate::rpi::Rpi;
 use anyhow::Result;
-use futures::prelude::*;
 use morningstar::prostar_mppt as ps;
 use std::{
-    boxed::Box,
     ops::Drop,
-    pin::Pin,
     time::{Duration, Instant},
 };
-use tokio::{task, time};
+use tokio::time;
 
 pub struct Connection {
     rpi: Rpi,
@@ -22,7 +19,7 @@ enum Command<'a> {
     WriteCoil(ps::Coil, bool),
     ReadStats(&'a mut ps::Stats),
     ReadSettings(&'a mut ps::Settings),
-    WriteSettings(&'a ps::Settings)
+    WriteSettings(&'a ps::Settings),
 }
 
 impl Drop for Connection {
@@ -32,17 +29,14 @@ impl Drop for Connection {
 }
 
 impl Connection {
-    pub async fn new(device: String, address: u8) -> Result<Self> {
-        Ok(task::spawn_blocking(move || {
-            let mut rpi = log_fatal!(
-                Rpi::new(),
-                "failed to init gpio {}",
-                panic!("failed to init gpio")
-            );
-            rpi.mpptc_enable();
-            Connection { rpi, con: None, device, address, last_command: Instant::now() }
-        })
-        .await?)
+    pub fn new(device: String, address: u8) -> Self {
+        let mut rpi = log_fatal!(
+            Rpi::new(),
+            "failed to init gpio {}",
+            panic!("failed to init gpio")
+        );
+        rpi.mpptc_enable();
+        Connection { rpi, con: None, device, address, last_command: Instant::now() }
     }
 
     async fn get_con(&mut self) -> Result<&mut ps::Connection> {
@@ -67,13 +61,19 @@ impl Connection {
                     Command::WriteCoil(coil, bit) => con.write_coil(*coil, *bit).await,
                     Command::ReadStats(st) => match con.stats().await {
                         Err(e) => Err(e),
-                        Ok(s) => { **st = s; Ok(()) }
-                    }
+                        Ok(s) => {
+                            **st = s;
+                            Ok(())
+                        }
+                    },
                     Command::ReadSettings(set) => match con.read_settings().await {
                         Err(e) => Err(e),
-                        Ok(s) => { **set = s; Ok(()) }
-                    }
-                    Command::WriteSettings(set) => con.write_settings(set).await
+                        Ok(s) => {
+                            **set = s;
+                            Ok(())
+                        }
+                    },
+                    Command::WriteSettings(set) => con.write_settings(set).await,
                 },
             };
             match r {
@@ -86,7 +86,7 @@ impl Connection {
                         self.rpi.mpptc_reboot();
                         tries += 1
                     } else {
-                        time::delay_for(Duration::from_millis(1000));
+                        time::delay_for(Duration::from_millis(1000)).await;
                         self.con = None;
                         tries += 1
                     }
@@ -106,7 +106,7 @@ impl Connection {
     }
 
     pub async fn write_coil(&mut self, coil: ps::Coil, bit: bool) -> Result<()> {
-        self.wait_for_throttle();
+        self.wait_for_throttle().await;
         match (coil, bit) {
             (ps::Coil::ResetControl, true) => {
                 // the reset coil will always fail because the controller resets
@@ -115,28 +115,26 @@ impl Connection {
                 let _ = c.write_coil(coil, bit).await;
                 Ok(())
             }
-            (_, _) => {
-                Ok(self.eval_command(Command::WriteCoil(coil, bit)).await?)
-            },
+            (_, _) => Ok(self.eval_command(Command::WriteCoil(coil, bit)).await?),
         }
     }
 
     pub async fn read_stats(&mut self) -> Result<ps::Stats> {
-        self.wait_for_throttle();
+        self.wait_for_throttle().await;
         let mut stats = ps::Stats::default();
         self.eval_command(Command::ReadStats(&mut stats)).await?;
         Ok(stats)
     }
 
     pub async fn read_settings(&mut self) -> Result<ps::Settings> {
-        self.wait_for_throttle();
+        self.wait_for_throttle().await;
         let mut settings = ps::Settings::default();
         self.eval_command(Command::ReadSettings(&mut settings)).await?;
         Ok(settings)
     }
 
     pub async fn write_settings(&mut self, settings: &ps::Settings) -> Result<()> {
-        self.wait_for_throttle();
+        self.wait_for_throttle().await;
         Ok(self.eval_command(Command::WriteSettings(settings)).await?)
     }
 

@@ -1,21 +1,15 @@
 use crate::ToMainLoop;
+use anyhow::Error;
+use futures::prelude::*;
 use serde_json;
 use solar_client::{Config, FromClient};
-use std::{
-    fs,
-    path::PathBuf,
-    thread,
-    time::Duration
-};
-use anyhow::{Result, Error};
-use futures::prelude::*;
+use std::{fs, path::PathBuf, time::Duration};
 use tokio::{
-    sync::mpsc::{channel, Receiver, Sender},
+    io::BufStream,
     net::{UnixListener, UnixStream},
-    io::{self, BufStream},
     prelude::*,
-    task,
-    time,
+    sync::mpsc::{channel, Sender},
+    task, time,
 };
 
 static STO: Duration = Duration::from_secs(2);
@@ -45,7 +39,7 @@ async fn client_loop(stream: UnixStream, mut to_main: Sender<ToMainLoop>) {
                     try_cf!(try_cf!(time::timeout(STO, stream.flush()).await));
                 }
             }
-        }
+        };
     };
     info!("client loop shutting down {:?}", res);
 }
