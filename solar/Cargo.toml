@@ -10,7 +10,6 @@ tokio = { version = "0.2", features = ["full"] }
 futures = "0.3"
 anyhow = "1"
 daemonize = "0.4"
-#tokio-modbus = { version = "0.4", features = ["rcu"] }
 log = "0.4"
 morningstar = { path = "../../morningstar" }
 rppal = "0.11"
@@ -22,3 +21,4 @@ solar-client = { path = "../solar-client" }
 structopt = "0.3"
 syslog = "5"
 chrono = "0.4"
+uom = "0.28"

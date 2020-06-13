@@ -3,11 +3,11 @@ extern crate log;
 #[macro_use]
 extern crate serde_derive;
 #[macro_use]
-extern crate error_chain;
+extern crate anyhow;
 
 use chrono::prelude::*;
 use morningstar::prostar_mppt as ps;
-
+use anyhow::{Result, Error};
 use std::{
     borrow::Borrow,
     fmt, fs,
@@ -149,20 +149,20 @@ pub struct ArchivedDay {
 }
 
 impl ArchivedDay {
-    fn file_exists(path: &Path) -> std::result::Result<bool, Box<dyn std::error::Error>> {
+    fn file_exists(path: &Path) -> Result<bool> {
         match fs::metadata(path) {
             Ok(m) => {
                 if m.is_file() {
                     Ok(true)
                 } else {
-                    Err(Box::new(UnexpectedObjectKind))
+                    Err(Error::from(UnexpectedObjectKind))
                 }
             }
             Err(e) => {
                 if e.kind() == std::io::ErrorKind::NotFound {
                     Ok(false)
                 } else {
-                    Err(Box::new(e))
+                    Err(Error::from(e))
                 }
             }
         }
@@ -182,6 +182,9 @@ pub struct Config {
     pub run_directory: PathBuf,
     pub archive_directory: PathBuf,
     pub stats_interval: u64,
+    pub netidx_base: String,
+    pub netidx_bind: String,
+    pub netidx_spn: Option<String>,
 }
 
 fn cat_paths(p0: impl AsRef<Path>, p1: impl AsRef<Path>) -> PathBuf {
@@ -215,13 +218,6 @@ impl Config {
             one_minute_averages: self.archive_for_date_pfx(date, "1m"),
             ten_minute_averages: self.archive_for_date_pfx(date, "10m"),
         }
-    }
-}
-
-error_chain! {
-    foreign_links {
-        SerdeJson(serde_json::Error);
-        Io(io::Error);
     }
 }
 
