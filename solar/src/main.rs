@@ -3,7 +3,7 @@ extern crate serde_derive;
 #[macro_use]
 extern crate log;
 #[macro_use]
-extern crate error_chain;
+extern crate netidx;
 
 macro_rules! log_fatal {
     ($e:expr, $m:expr, $a:expr) => {
@@ -22,13 +22,13 @@ mod modbus;
 mod rpi;
 
 use daemonize::Daemonize;
-use morningstar::error as mse;
 use morningstar::prostar_mppt as ps;
+use anyhow::Result;
 use solar_client::{self, archive, Config, FromClient, Stats, ToClient};
+use tokio::sync::mpsc::{channel, Sender};
 use std::{
     fs,
     io::{self, LineWriter, Write},
-    sync::mpsc::{channel, Sender},
     thread,
     time::Duration,
 };

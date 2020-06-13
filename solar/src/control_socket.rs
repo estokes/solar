@@ -5,10 +5,12 @@ use std::{
     fs,
     path::PathBuf,
     thread,
+    time::Duration
 };
 use anyhow::{Result, Error};
+use futures::prelude::*;
 use tokio::{
-    mpsc::{channel, Receiver, Sender},
+    sync::mpsc::{channel, Receiver, Sender},
     net::{UnixListener, UnixStream},
     io::{self, BufStream},
     prelude::*,
@@ -18,7 +20,7 @@ use tokio::{
 
 static STO: Duration = Duration::from_secs(2);
 
-async fn client_loop(stream: UnixStream, to_main: Sender<ToMainLoop>) {
+async fn client_loop(stream: UnixStream, mut to_main: Sender<ToMainLoop>) {
     trace!("client loop started");
     let mut stream = BufStream::new(stream);
     let mut line = String::new();
@@ -29,23 +31,23 @@ async fn client_loop(stream: UnixStream, to_main: Sender<ToMainLoop>) {
         try_cf!(stream.read_line(&mut line).await);
         let m: FromClient = try_cf!(serde_json::from_str(&line));
         trace!("client loop message from client: {:?}", m);
-        let (send_reply, recv_reply) = channel(100);
+        let (send_reply, mut recv_reply) = channel(100);
         try_cf!(to_main.send(ToMainLoop::FromClient(m, send_reply)).await);
-        loop {
+        break loop {
             buf.clear();
             match recv_reply.next().await {
                 None => break Ok(()),
                 Some(s) => {
                     trace!("reply to client {:?}", s);
-                    try_cf!(serde_json::to_writer(&mut buf));
-                    buf.push('\n');
+                    try_cf!(serde_json::to_writer(&mut buf, &s));
+                    buf.push(b'\n');
                     try_cf!(try_cf!(time::timeout(STO, stream.write_all(&buf)).await));
                     try_cf!(try_cf!(time::timeout(STO, stream.flush()).await));
                 }
             }
         }
     };
-    info!("client loop shutting down {}", res);
+    info!("client loop shutting down {:?}", res);
 }
 
 async fn accept_loop(path: PathBuf, to_main: Sender<ToMainLoop>) {
@@ -55,7 +57,7 @@ async fn accept_loop(path: PathBuf, to_main: Sender<ToMainLoop>) {
         "failed to create control socket {}",
         return
     );
-    while let Some(client) = listener.next() {
+    while let Some(client) = listener.next().await {
         let client = match client {
             Ok(client) => client,
             Err(e) => {
