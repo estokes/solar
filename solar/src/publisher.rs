@@ -278,10 +278,10 @@ macro_rules! bool {
             Value::False => false,
             v => {
                 warn!("{:?} not accepted, expected bool", v);
-                return None
+                return None;
             }
         }
-    }
+    };
 }
 
 #[derive(Clone)]
@@ -704,24 +704,27 @@ impl PublishedControl {
     }
 
     fn process_writes(&self, mut batch: Batch) -> Vec<FromClient> {
-        batch.drain(..).filter_map(|(id, v)| {
-            if id == self.charging.id() {
-                Some(FromClient::SetCharging(bool!(v)))
-            } else if id == self.load.id() {
-                Some(FromClient::SetLoad(bool!(v)))
-            } else if id == self.reset.id() {
-                Some(FromClient::ResetController)
-            } else if id == self.phy_solar.id() {
-                Some(FromClient::SetPhySolar(bool!(v)))
-            } else if id == self.phy_battery.id() {
-                Some(FromClient::SetPhyBattery(bool!(v)))
-            } else if id == self.phy_master.id() {
-                Some(FromClient::SetPhyMaster(bool!(v)))
-            } else {
-                warn!("control id {:?} not recognized", id);
-                None
-            }
-        }).collect()
+        batch
+            .drain(..)
+            .filter_map(|(id, v)| {
+                if id == self.charging.id() {
+                    Some(FromClient::SetCharging(bool!(v)))
+                } else if id == self.load.id() {
+                    Some(FromClient::SetLoad(bool!(v)))
+                } else if id == self.reset.id() {
+                    Some(FromClient::ResetController)
+                } else if id == self.phy_solar.id() {
+                    Some(FromClient::SetPhySolar(bool!(v)))
+                } else if id == self.phy_battery.id() {
+                    Some(FromClient::SetPhyBattery(bool!(v)))
+                } else if id == self.phy_master.id() {
+                    Some(FromClient::SetPhyMaster(bool!(v)))
+                } else {
+                    warn!("control id {:?} not recognized", id);
+                    None
+                }
+            })
+            .collect()
     }
 }
 
@@ -729,6 +732,7 @@ struct NetidxInner {
     publisher: Publisher,
     stats: PublishedStats,
     settings: PublishedSettings,
+    control: PublishedControl,
     current: Option<Settings>,
     to_main: Sender<ToMainLoop>,
 }
@@ -738,47 +742,80 @@ pub(crate) struct Netidx(Arc<Mutex<NetidxInner>>);
 
 impl Netidx {
     async fn handle_writes(self) {
-        let (tx, mut rx) = fmpsc::channel(10);
+        let (settings_tx, settings_rx) = fmpsc::channel(10);
+        let (control_tx, control_rx) = fmpsc::channel(10);
         {
             let inner = self.0.lock();
-            inner.settings.register_writable(tx);
+            inner.settings.register_writable(settings_tx);
+            inner.control.register_writable(control_tx);
         }
-        while let Some(batch) = rx.next().await {
-            let (mut to_main, s) = {
-                let inner = self.0.lock();
-                let mut s = match inner.current.as_ref() {
-                    Some(settings) => *settings,
-                    None => {
-                        warn!("settings are not initialized");
-                        continue;
+        let settings_rx = settings_rx.fuse();
+        let control_rx = control_rx.fuse();
+        'main: loop {
+            select_biased! {
+                m = control_rx.next() => match m {
+                    None => break,
+                    Some(batch) => {
+                        let (mut to_main, commands) = {
+                            let inner = self.0.lock();
+                            (inner.to_main.clone(), inner.control.process_writes(batch))
+                        };
+                        for cmd in commands {
+                            let (reply_tx, mut reply_rx) = mpsc::channel(1);
+                            let m = ToMainLoop::FromClient(cmd, reply_tx);
+                            match to_main.send(m).await {
+                                Err(_) => break 'main,
+                                Ok(()) => match reply_rx.next() {
+                                    None => break 'main,
+                                    Some(_) => ()
+                                }
+                            }
+                        }
                     }
-                };
-                inner.settings.process_writes(batch, &mut s);
-                (inner.to_main.clone(), s)
-            };
-            let (reply_tx, mut reply_rx) = mpsc::channel(1);
-            let msg = ToMainLoop::FromClient(FromClient::WriteSettings(s), reply_tx);
-            match to_main.send(msg).await {
-                Err(_) => break,
-                Ok(()) => (),
-            }
-            match reply_rx.next().await {
-                None => break,
-                Some(ToClient::Err(e)) => warn!("failed to update settings {}", e),
-                Some(ToClient::Ok) => {
-                    let mut inner = self.0.lock();
-                    inner.current = Some(s);
-                    info!("settings updated successfully");
-                }
-                Some(_) => {
-                    warn!("unexpected response from main loop");
+                },
+                m = settings_rx.next() => match m {
+                    None => break,
+                    Some(batch) => {
+                        let (mut to_main, s) = {
+                            let inner = self.0.lock();
+                            let mut s = match inner.current.as_ref() {
+                                Some(settings) => *settings,
+                                None => {
+                                    warn!("settings are not initialized");
+                                    continue;
+                                }
+                            };
+                            inner.settings.process_writes(batch, &mut s);
+                            (inner.to_main.clone(), s)
+                        };
+                        let (reply_tx, mut reply_rx) = mpsc::channel(1);
+                        let msg =
+                            ToMainLoop::FromClient(FromClient::WriteSettings(s), reply_tx);
+                        match to_main.send(msg).await {
+                            Err(_) => break,
+                            Ok(()) => (),
+                        }
+                        match reply_rx.next().await {
+                            None => break,
+                            Some(ToClient::Err(e)) =>
+                                warn!("failed to update settings {}", e),
+                            Some(ToClient::Ok) => {
+                                let mut inner = self.0.lock();
+                                inner.current = Some(s);
+                                info!("settings updated successfully");
+                            }
+                            Some(_) => {
+                                warn!("unexpected response from main loop");
+                            }
+                        }
+                    }
                 }
             }
         }
     }
 
     async fn new(cfg: &Config, to_main: Sender<ToMainLoop>) -> Result<Self> {
-        let resolver = netidx::config::Config::load_default()?;
+        let resolver = task::block_in_place(|| netidx::config::Config::load_default())?;
         let bindcfg = cfg.netidx_bind.parse::<BindCfg>()?;
         let base = Path::from(cfg.netidx_base.clone());
         let auth = cfg
@@ -789,10 +826,12 @@ impl Netidx {
         let publisher = Publisher::new(resolver, auth, bindcfg).await?;
         let stats = PublishedStats::new(&publisher, &base.append("stats"))?;
         let settings = PublishedSettings::new(&publisher, &base.append("settings"))?;
+        let control = PublishedControl::new(&publisher, &base.append("control"))?;
         let t = Netidx(Arc::new(Mutex::new(NetidxInner {
             publisher,
             stats,
             settings,
+            control,
             current: None,
             to_main,
         })));
@@ -809,6 +848,11 @@ impl Netidx {
         let mut inner = self.0.lock();
         inner.current = Some(*set);
         inner.settings.update(set);
+    }
+
+    fn update_control(&self, st: &Stats, phy: &Phy) {
+        let mut inner = self.0.lock();
+        inner.control.update(st, phy);
     }
 
     async fn flush(&self, timeout: Duration) -> Result<()> {
