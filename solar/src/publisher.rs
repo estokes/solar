@@ -1,25 +1,33 @@
 use crate::ToMainLoop;
 use anyhow::Result;
-use morningstar::prostar_mppt::{Settings, Stats};
+use futures::{channel::mpsc as fmpsc, prelude::*, select_biased};
+use log::{info, warn};
+use morningstar::prostar_mppt::{ChargeState, LoadState, Settings, Stats};
 use netidx::{
     self,
     chars::Chars,
     path::Path,
-    publisher::{BindCfg, Publisher, Val, Value},
+    publisher::{Batch, BindCfg, Publisher, Val, Value},
     resolver::Auth,
 };
-use solar_client::Config;
+use parking_lot::Mutex;
+use solar_client::{Config, FromClient, Phy, ToClient};
+use std::{sync::Arc, time::Duration};
+use tokio::{
+    sync::mpsc::{self, Sender},
+    task,
+};
 use uom::si::{
     electric_charge::ampere_hour,
     electric_current::ampere,
     electric_potential::volt,
     electrical_resistance::ohm,
     energy::kilowatt_hour,
+    f32::*,
     power::watt,
     thermodynamic_temperature::degree_celsius,
     time::{day, hour, minute, second},
 };
-use std::time::Duration;
 
 #[derive(Clone)]
 struct PublishedStats {
@@ -251,6 +259,31 @@ impl PublishedStats {
     }
 }
 
+macro_rules! f32 {
+    ($v:expr) => {
+        match $v {
+            Value::F32(v) => v,
+            v => {
+                warn!("{:?} not accepted, expected F32", v);
+                continue;
+            }
+        }
+    };
+}
+
+macro_rules! bool {
+    ($v:expr) => {
+        match $v {
+            Value::True => true,
+            Value::False => false,
+            v => {
+                warn!("{:?} not accepted, expected bool", v);
+                return None
+            }
+        }
+    }
+}
+
 #[derive(Clone)]
 struct PublishedSettings {
     regulation_voltage: Val,
@@ -452,16 +485,299 @@ impl PublishedSettings {
         self.charge_current_limit
             .update(Value::F32(set.charge_current_limit.get::<ampere>()));
     }
+
+    fn register_writable(&self, channel: fmpsc::Sender<Batch>) {
+        self.regulation_voltage.writes(channel.clone());
+        self.float_voltage.writes(channel.clone());
+        self.time_before_float.writes(channel.clone());
+        self.time_before_float_low_battery.writes(channel.clone());
+        self.float_low_battery_voltage_trigger.writes(channel.clone());
+        self.float_cancel_voltage.writes(channel.clone());
+        self.exit_float_time.writes(channel.clone());
+        self.equalize_voltage.writes(channel.clone());
+        self.days_between_equalize_cycles.writes(channel.clone());
+        self.equalize_time_limit_above_regulation_voltage.writes(channel.clone());
+        self.equalize_time_limit_at_regulation_voltage.writes(channel.clone());
+        self.alarm_on_setting_change.writes(channel.clone());
+        self.reference_charge_voltage_limit.writes(channel.clone());
+        self.battery_charge_current_limit.writes(channel.clone());
+        self.temperature_compensation_coefficent.writes(channel.clone());
+        self.high_voltage_disconnect.writes(channel.clone());
+        self.high_voltage_reconnect.writes(channel.clone());
+        self.maximum_charge_voltage_reference.writes(channel.clone());
+        self.max_battery_temp_compensation_limit.writes(channel.clone());
+        self.min_battery_temp_compensation_limit.writes(channel.clone());
+        self.load_low_voltage_disconnect.writes(channel.clone());
+        self.load_low_voltage_reconnect.writes(channel.clone());
+        self.load_high_voltage_disconnect.writes(channel.clone());
+        self.load_high_voltage_reconnect.writes(channel.clone());
+        self.lvd_load_current_compensation.writes(channel.clone());
+        self.lvd_warning_timeout.writes(channel.clone());
+        self.led_green_to_green_and_yellow_limit.writes(channel.clone());
+        self.led_green_and_yellow_to_yellow_limit.writes(channel.clone());
+        self.led_yellow_to_yellow_and_red_limit.writes(channel.clone());
+        self.led_yellow_and_red_to_red_flashing_limit.writes(channel.clone());
+        self.modbus_id.writes(channel.clone());
+        self.meterbus_id.writes(channel.clone());
+        self.mppt_fixed_vmp.writes(channel.clone());
+        self.mppt_fixed_vmp_percent.writes(channel.clone());
+        self.charge_current_limit.writes(channel);
+    }
+
+    fn process_writes(&self, mut batch: Batch, p: &mut Settings) {
+        for (id, v) in batch.drain(..) {
+            if id == self.regulation_voltage.id() {
+                p.regulation_voltage = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.float_voltage.id() {
+                p.float_voltage = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.time_before_float.id() {
+                p.time_before_float = Time::new::<second>(f32!(v));
+            } else if id == self.time_before_float_low_battery.id() {
+                p.time_before_float_low_battery = Time::new::<second>(f32!(v));
+            } else if id == self.float_low_battery_voltage_trigger.id() {
+                p.float_low_battery_voltage_trigger =
+                    ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.float_cancel_voltage.id() {
+                p.float_cancel_voltage = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.exit_float_time.id() {
+                p.exit_float_time = Time::new::<minute>(f32!(v));
+            } else if id == self.equalize_voltage.id() {
+                p.equalize_voltage = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.days_between_equalize_cycles.id() {
+                p.days_between_equalize_cycles = Time::new::<day>(f32!(v));
+            } else if id == self.equalize_time_limit_above_regulation_voltage.id() {
+                p.equalize_time_limit_above_regulation_voltage =
+                    Time::new::<minute>(f32!(v));
+            } else if id == self.equalize_time_limit_at_regulation_voltage.id() {
+                p.equalize_time_limit_at_regulation_voltage =
+                    Time::new::<minute>(f32!(v));
+            } else if id == self.alarm_on_setting_change.id() {
+                p.alarm_on_setting_change = match v {
+                    Value::True => true,
+                    Value::False => false,
+                    v => {
+                        warn!("{:?} not accepted, expected bool", v);
+                        continue;
+                    }
+                };
+            } else if id == self.reference_charge_voltage_limit.id() {
+                p.reference_charge_voltage_limit =
+                    ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.battery_charge_current_limit.id() {
+                p.battery_charge_current_limit = ElectricCurrent::new::<ampere>(f32!(v));
+            } else if id == self.temperature_compensation_coefficent.id() {
+                p.temperature_compensation_coefficent =
+                    ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.high_voltage_disconnect.id() {
+                p.high_voltage_disconnect = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.high_voltage_reconnect.id() {
+                p.high_voltage_reconnect = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.maximum_charge_voltage_reference.id() {
+                p.maximum_charge_voltage_reference =
+                    ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.max_battery_temp_compensation_limit.id() {
+                p.max_battery_temp_compensation_limit =
+                    ThermodynamicTemperature::new::<degree_celsius>(f32!(v));
+            } else if id == self.min_battery_temp_compensation_limit.id() {
+                p.min_battery_temp_compensation_limit =
+                    ThermodynamicTemperature::new::<degree_celsius>(f32!(v));
+            } else if id == self.load_low_voltage_disconnect.id() {
+                p.load_low_voltage_disconnect = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.load_low_voltage_reconnect.id() {
+                p.load_low_voltage_reconnect = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.load_high_voltage_disconnect.id() {
+                p.load_high_voltage_disconnect = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.load_high_voltage_reconnect.id() {
+                p.load_high_voltage_reconnect = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.lvd_load_current_compensation.id() {
+                p.lvd_load_current_compensation =
+                    ElectricalResistance::new::<ohm>(f32!(v));
+            } else if id == self.lvd_warning_timeout.id() {
+                p.lvd_warning_timeout = Time::new::<second>(f32!(v));
+            } else if id == self.led_green_to_green_and_yellow_limit.id() {
+                p.led_green_to_green_and_yellow_limit =
+                    ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.led_green_and_yellow_to_yellow_limit.id() {
+                p.led_green_and_yellow_to_yellow_limit =
+                    ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.led_yellow_to_yellow_and_red_limit.id() {
+                p.led_yellow_to_yellow_and_red_limit =
+                    ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.led_yellow_and_red_to_red_flashing_limit.id() {
+                p.led_yellow_and_red_to_red_flashing_limit =
+                    ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.modbus_id.id() {
+                p.modbus_id = match v {
+                    Value::U32(v) => v as u8,
+                    v => {
+                        warn!("{:?} was not accepted, expected U32", v);
+                        continue;
+                    }
+                };
+            } else if id == self.meterbus_id.id() {
+                p.meterbus_id = match v {
+                    Value::U32(v) => v as u8,
+                    v => {
+                        warn!("{:?} was not accepted, expected U32", v);
+                        continue;
+                    }
+                };
+            } else if id == self.mppt_fixed_vmp.id() {
+                p.mppt_fixed_vmp = ElectricPotential::new::<volt>(f32!(v));
+            } else if id == self.mppt_fixed_vmp_percent.id() {
+                p.mppt_fixed_vmp_percent = f32!(v);
+            } else if id == self.charge_current_limit.id() {
+                p.charge_current_limit = ElectricCurrent::new::<ampere>(f32!(v));
+            } else {
+                warn!("unknown settings field {:?}", id)
+            }
+        }
+    }
 }
 
-struct Netidx {
+struct PublishedControl {
+    charging: Val,
+    load: Val,
+    reset: Val,
+    phy_solar: Val,
+    phy_battery: Val,
+    phy_master: Val,
+}
+
+impl PublishedControl {
+    fn new(publisher: &Publisher, base: &Path) -> Result<Self> {
+        Ok(PublishedControl {
+            charging: publisher.publish(base.append("charging"), Value::Null)?,
+            load: publisher.publish(base.append("load"), Value::Null)?,
+            reset: publisher.publish(base.append("reset"), Value::Null)?,
+            phy_solar: publisher.publish(base.append("phy_solar"), Value::Null)?,
+            phy_battery: publisher.publish(base.append("phy_battery"), Value::Null)?,
+            phy_master: publisher.publish(base.append("phy_master"), Value::Null)?,
+        })
+    }
+
+    fn update(&self, st: &Stats, phy: &Phy) {
+        self.charging.update(match st.charge_state {
+            ChargeState::Disconnect | ChargeState::Fault => Value::False,
+            ChargeState::UnknownState(_)
+            | ChargeState::Absorption
+            | ChargeState::BulkMPPT
+            | ChargeState::Equalize
+            | ChargeState::Fixed
+            | ChargeState::Float
+            | ChargeState::Night
+            | ChargeState::NightCheck
+            | ChargeState::Start
+            | ChargeState::Slave => Value::True,
+        });
+        self.load.update(match st.load_state {
+            LoadState::Disconnect | LoadState::Fault | LoadState::LVD => Value::False,
+            LoadState::LVDWarning
+            | LoadState::Normal
+            | LoadState::NormalOff
+            | LoadState::NotUsed
+            | LoadState::Override
+            | LoadState::Start
+            | LoadState::Unknown(_) => Value::True,
+        });
+        self.phy_solar.update(match phy.solar {
+            true => Value::True,
+            false => Value::False,
+        });
+        self.phy_battery.update(match phy.battery {
+            true => Value::True,
+            false => Value::False,
+        });
+        self.phy_master.update(match phy.master {
+            true => Value::True,
+            false => Value::False,
+        });
+    }
+
+    fn register_writable(&self, channel: fmpsc::Sender<Batch>) {
+        self.charging.writes(channel.clone());
+        self.load.writes(channel.clone());
+        self.reset.writes(channel.clone());
+        self.phy_solar.writes(channel.clone());
+        self.phy_battery.writes(channel.clone());
+        self.phy_master.writes(channel);
+    }
+
+    fn process_writes(&self, mut batch: Batch) -> Vec<FromClient> {
+        batch.drain(..).filter_map(|(id, v)| {
+            if id == self.charging.id() {
+                Some(FromClient::SetCharging(bool!(v)))
+            } else if id == self.load.id() {
+                Some(FromClient::SetLoad(bool!(v)))
+            } else if id == self.reset.id() {
+                Some(FromClient::ResetController)
+            } else if id == self.phy_solar.id() {
+                Some(FromClient::SetPhySolar(bool!(v)))
+            } else if id == self.phy_battery.id() {
+                Some(FromClient::SetPhyBattery(bool!(v)))
+            } else if id == self.phy_master.id() {
+                Some(FromClient::SetPhyMaster(bool!(v)))
+            } else {
+                warn!("control id {:?} not recognized", id);
+                None
+            }
+        }).collect()
+    }
+}
+
+struct NetidxInner {
     publisher: Publisher,
     stats: PublishedStats,
     settings: PublishedSettings,
+    current: Option<Settings>,
+    to_main: Sender<ToMainLoop>,
 }
 
+#[derive(Clone)]
+pub(crate) struct Netidx(Arc<Mutex<NetidxInner>>);
+
 impl Netidx {
-    async fn new(cfg: &Config) -> Result<Self> {
+    async fn handle_writes(self) {
+        let (tx, mut rx) = fmpsc::channel(10);
+        {
+            let inner = self.0.lock();
+            inner.settings.register_writable(tx);
+        }
+        while let Some(batch) = rx.next().await {
+            let (mut to_main, s) = {
+                let inner = self.0.lock();
+                let mut s = match inner.current.as_ref() {
+                    Some(settings) => *settings,
+                    None => {
+                        warn!("settings are not initialized");
+                        continue;
+                    }
+                };
+                inner.settings.process_writes(batch, &mut s);
+                (inner.to_main.clone(), s)
+            };
+            let (reply_tx, mut reply_rx) = mpsc::channel(1);
+            let msg = ToMainLoop::FromClient(FromClient::WriteSettings(s), reply_tx);
+            match to_main.send(msg).await {
+                Err(_) => break,
+                Ok(()) => (),
+            }
+            match reply_rx.next().await {
+                None => break,
+                Some(ToClient::Err(e)) => warn!("failed to update settings {}", e),
+                Some(ToClient::Ok) => {
+                    let mut inner = self.0.lock();
+                    inner.current = Some(s);
+                    info!("settings updated successfully");
+                }
+                Some(_) => {
+                    warn!("unexpected response from main loop");
+                }
+            }
+        }
+    }
+
+    async fn new(cfg: &Config, to_main: Sender<ToMainLoop>) -> Result<Self> {
         let resolver = netidx::config::Config::load_default()?;
         let bindcfg = cfg.netidx_bind.parse::<BindCfg>()?;
         let base = Path::from(cfg.netidx_base.clone());
@@ -473,18 +789,30 @@ impl Netidx {
         let publisher = Publisher::new(resolver, auth, bindcfg).await?;
         let stats = PublishedStats::new(&publisher, &base.append("stats"))?;
         let settings = PublishedSettings::new(&publisher, &base.append("settings"))?;
-        Ok(Netidx { publisher, stats, settings })
+        let t = Netidx(Arc::new(Mutex::new(NetidxInner {
+            publisher,
+            stats,
+            settings,
+            current: None,
+            to_main,
+        })));
+        task::spawn(t.clone().handle_writes());
+        Ok(t)
     }
 
     fn update_stats(&self, st: &Stats) {
-        self.stats.update(st);
+        let inner = self.0.lock();
+        inner.stats.update(st);
     }
 
     fn update_settings(&self, set: &Settings) {
-        self.settings.update(set);
+        let mut inner = self.0.lock();
+        inner.current = Some(*set);
+        inner.settings.update(set);
     }
 
     async fn flush(&self, timeout: Duration) -> Result<()> {
-        Ok(self.publisher.flush(Some(timeout)).await?)
+        let publisher = self.0.lock().publisher.clone();
+        Ok(publisher.flush(Some(timeout)).await?)
     }
 }
