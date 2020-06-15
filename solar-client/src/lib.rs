@@ -11,7 +11,7 @@ use anyhow::{Result, Error};
 use std::{
     borrow::Borrow,
     fmt, fs,
-    io::{self, BufRead, BufReader, LineWriter, Write},
+    io::{BufRead, BufReader, LineWriter, Write},
     iter::Iterator,
     os::unix::net::UnixStream,
     path::{Path, PathBuf},

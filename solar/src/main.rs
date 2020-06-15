@@ -18,15 +18,16 @@ macro_rules! log_fatal {
     };
 }
 
-mod publisher;
 mod control_socket;
 mod modbus;
+mod publisher;
 mod rpi;
 
 use anyhow::Result;
 use daemonize::Daemonize;
 use futures::{prelude::*, select_biased};
 use morningstar::prostar_mppt as ps;
+use publisher::Netidx;
 use solar_client::{self, archive, Config, FromClient, Stats, ToClient};
 use std::time::Duration;
 use structopt::StructOpt;
@@ -71,9 +72,12 @@ async fn run_server(config: Config) {
     let mut log = log_fatal!(open_log(&config).await, "failed to open log {}", return);
     let mut mb = modbus::Connection::new(config.device.clone(), config.modbus_id);
     let mut tick = time::interval(Duration::from_secs(config.stats_interval)).fuse();
-    control_socket::run_server(&config, to_main);
+    control_socket::run_server(&config, to_main.clone());
+    let netidx =
+        log_fatal!(Netidx::new(&config, to_main).await, "init publisher {}", return);
     let mut tailing: Vec<Sender<ToClient>> = Vec::new();
     let mut statsbuf = Vec::new();
+    let mut initsettings = false;
     loop {
         let msg = select_biased! {
             _ = tick.next() => ToMainLoop::Tick,
@@ -123,10 +127,15 @@ async fn run_server(config: Config) {
                 }
                 FromClient::TailStats => tailing.push(reply),
                 FromClient::WriteSettings(settings) => {
-                    send_reply(mb.write_settings(&settings).await, reply).await
+                    let r = mb.write_settings(&settings).await;
+                    if r.is_ok() {
+                        netidx.update_settings(&settings);
+                    }
+                    send_reply(r, reply).await
                 }
                 FromClient::ReadSettings => match mb.read_settings().await {
                     Ok(s) => {
+                        netidx.update_settings(&s);
                         let _ = reply.send(ToClient::Settings(s)).await;
                     }
                     Err(e) => {
@@ -152,14 +161,32 @@ async fn run_server(config: Config) {
                 let controller = if !phy.master || !phy.battery {
                     None
                 } else {
+                    if !initsettings {
+                        match mb.read_settings().await {
+                            Ok(s) => {
+                                initsettings = true;
+                                netidx.update_settings(&s);
+                            }
+                            Err(_) => ()
+                        }
+                    }
                     match mb.read_stats().await {
-                        Ok(s) => Some(s),
+                        Ok(s) => {
+                            netidx.update_stats(&s);
+                            netidx.update_control_stats(&s);
+                            Some(s)
+                        },
                         Err(e) => {
                             error!("reading stats failed: {}", e);
                             None
                         }
                     }
                 };
+                netidx.update_control_phy(&phy);
+                match netidx.flush(Duration::from_secs(10)).await {
+                    Ok(()) => (),
+                    Err(e) => warn!("netidx flush failed {}", e),
+                }
                 let timestamp = chrono::Local::now();
                 let st = Stats::V2 { timestamp, controller, phy };
                 statsbuf.clear();

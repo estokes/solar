@@ -656,7 +656,7 @@ impl PublishedControl {
         })
     }
 
-    fn update(&self, st: &Stats, phy: &Phy) {
+    fn update_stats(&self, st: &Stats) {
         self.charging.update(match st.charge_state {
             ChargeState::Disconnect | ChargeState::Fault => Value::False,
             ChargeState::UnknownState(_)
@@ -680,6 +680,9 @@ impl PublishedControl {
             | LoadState::Start
             | LoadState::Unknown(_) => Value::True,
         });
+    }
+
+    fn update_phy(&self, phy: &Phy) {
         self.phy_solar.update(match phy.solar {
             true => Value::True,
             false => Value::False,
@@ -749,8 +752,8 @@ impl Netidx {
             inner.settings.register_writable(settings_tx);
             inner.control.register_writable(control_tx);
         }
-        let settings_rx = settings_rx.fuse();
-        let control_rx = control_rx.fuse();
+        let mut settings_rx = settings_rx.fuse();
+        let mut control_rx = control_rx.fuse();
         'main: loop {
             select_biased! {
                 m = control_rx.next() => match m {
@@ -765,7 +768,7 @@ impl Netidx {
                             let m = ToMainLoop::FromClient(cmd, reply_tx);
                             match to_main.send(m).await {
                                 Err(_) => break 'main,
-                                Ok(()) => match reply_rx.next() {
+                                Ok(()) => match reply_rx.next().await {
                                     None => break 'main,
                                     Some(_) => ()
                                 }
@@ -814,7 +817,7 @@ impl Netidx {
         }
     }
 
-    async fn new(cfg: &Config, to_main: Sender<ToMainLoop>) -> Result<Self> {
+    pub(crate) async fn new(cfg: &Config, to_main: Sender<ToMainLoop>) -> Result<Self> {
         let resolver = task::block_in_place(|| netidx::config::Config::load_default())?;
         let bindcfg = cfg.netidx_bind.parse::<BindCfg>()?;
         let base = Path::from(cfg.netidx_base.clone());
@@ -839,23 +842,28 @@ impl Netidx {
         Ok(t)
     }
 
-    fn update_stats(&self, st: &Stats) {
+    pub(crate) fn update_stats(&self, st: &Stats) {
         let inner = self.0.lock();
         inner.stats.update(st);
     }
 
-    fn update_settings(&self, set: &Settings) {
+    pub(crate) fn update_settings(&self, set: &Settings) {
         let mut inner = self.0.lock();
         inner.current = Some(*set);
         inner.settings.update(set);
     }
 
-    fn update_control(&self, st: &Stats, phy: &Phy) {
-        let mut inner = self.0.lock();
-        inner.control.update(st, phy);
+    pub(crate) fn update_control_stats(&self, st: &Stats) {
+        let inner = self.0.lock();
+        inner.control.update_stats(st);
     }
 
-    async fn flush(&self, timeout: Duration) -> Result<()> {
+    pub(crate) fn update_control_phy(&self, phy: &Phy) {
+        let inner = self.0.lock();
+        inner.control.update_phy(phy);
+    }
+
+    pub(crate) async fn flush(&self, timeout: Duration) -> Result<()> {
         let publisher = self.0.lock().publisher.clone();
         Ok(publisher.flush(Some(timeout)).await?)
     }
