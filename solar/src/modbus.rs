@@ -1,9 +1,11 @@
 use crate::rpi::Rpi;
-use anyhow::Result;
+use anyhow::{Error, Result};
 use log::warn;
 use morningstar::prostar_mppt as ps;
 use std::time::{Duration, Instant};
 use tokio::time;
+
+static CMDTO: Duration = Duration::from_secs(5);
 
 pub struct Connection {
     rpi: Rpi,
@@ -53,22 +55,39 @@ impl Connection {
             let r = match self.get_con().await {
                 Err(e) => Err(e),
                 Ok(con) => match &mut command {
-                    Command::WriteCoil(coil, bit) => con.write_coil(*coil, *bit).await,
-                    Command::ReadStats(st) => match con.stats().await {
-                        Err(e) => Err(e),
-                        Ok(s) => {
-                            **st = s;
-                            Ok(())
+                    Command::WriteCoil(coil, bit) => {
+                        match time::timeout(CMDTO, con.write_coil(*coil, *bit)).await {
+                            Err(e) => Err(Error::from(e)),
+                            Ok(Err(e)) => Err(e),
+                            Ok(Ok(())) => Ok(()),
                         }
-                    },
-                    Command::ReadSettings(set) => match con.read_settings().await {
-                        Err(e) => Err(e),
-                        Ok(s) => {
-                            **set = s;
-                            Ok(())
+                    }
+                    Command::ReadStats(st) => {
+                        match time::timeout(CMDTO, con.stats()).await {
+                            Err(e) => Err(Error::from(e)),
+                            Ok(Err(e)) => Err(e),
+                            Ok(Ok(s)) => {
+                                **st = s;
+                                Ok(())
+                            }
                         }
-                    },
-                    Command::WriteSettings(set) => con.write_settings(set).await,
+                    }
+                    Command::ReadSettings(set) => {
+                        match time::timeout(CMDTO, con.read_settings()).await {
+                            Err(e) => Err(Error::from(e)),
+                            Ok(Err(e)) => Err(e),
+                            Ok(Ok(s)) => {
+                                **set = s;
+                                Ok(())
+                            }
+                        }
+                    }
+                    Command::WriteSettings(set) =>
+                        match time::timeout(CMDTO, con.write_settings(set)).await {
+                            Err(e) => Err(Error::from(e)),
+                            Ok(Err(e)) => Err(e),
+                            Ok(Ok(())) => Ok(())
+                        }
                 },
             };
             match r {
@@ -92,7 +111,7 @@ impl Connection {
     }
 
     async fn wait_for_throttle(&mut self) {
-        let throttle = Duration::from_secs(2);
+        let throttle = Duration::from_secs(1);
         let now = Instant::now();
         let elapsed = now - self.last_command;
         if elapsed < throttle {
