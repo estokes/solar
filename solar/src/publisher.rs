@@ -824,12 +824,15 @@ impl Netidx {
         let auth = cfg
             .netidx_spn
             .clone()
-            .map(|s| Auth::Krb5 { spn: Some(s), upn: None })
+            .map(|s| Auth::Krb5 { spn: Some(s), upn: cfg.netidx_upn.clone() })
             .unwrap_or(Auth::Anonymous);
+        info!("create publisher");
         let publisher = Publisher::new(resolver, auth, bindcfg).await?;
+        info!("created publisher");
         let stats = PublishedStats::new(&publisher, &base.append("stats"))?;
         let settings = PublishedSettings::new(&publisher, &base.append("settings"))?;
         let control = PublishedControl::new(&publisher, &base.append("control"))?;
+        info!("published stats, settings, control");
         let t = Netidx(Arc::new(Mutex::new(NetidxInner {
             publisher,
             stats,
@@ -844,27 +847,34 @@ impl Netidx {
 
     pub(crate) fn update_stats(&self, st: &Stats) {
         let inner = self.0.lock();
+        info!("stats updated");
         inner.stats.update(st);
     }
 
     pub(crate) fn update_settings(&self, set: &Settings) {
         let mut inner = self.0.lock();
+        info!("settings updated");
         inner.current = Some(*set);
         inner.settings.update(set);
     }
 
     pub(crate) fn update_control_stats(&self, st: &Stats) {
         let inner = self.0.lock();
+        info!("control stats updated");
         inner.control.update_stats(st);
     }
 
     pub(crate) fn update_control_phy(&self, phy: &Phy) {
         let inner = self.0.lock();
+        info!("phy updated");
         inner.control.update_phy(phy);
     }
 
     pub(crate) async fn flush(&self, timeout: Duration) -> Result<()> {
         let publisher = self.0.lock().publisher.clone();
-        Ok(publisher.flush(Some(timeout)).await?)
+        info!("publisher flush");
+        publisher.flush(Some(timeout)).await?;
+        info!("publisher flushed");
+        Ok(())
     }
 }

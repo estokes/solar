@@ -182,6 +182,7 @@ pub struct Config {
     pub run_directory: PathBuf,
     pub archive_directory: PathBuf,
     pub stats_interval: u64,
+    pub log_level: log::LevelFilter,
     pub netidx_base: String,
     pub netidx_bind: String,
     pub netidx_spn: Option<String>,

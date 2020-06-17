@@ -1,4 +1,5 @@
 use crate::rpi::Rpi;
+use log::warn;
 use anyhow::Result;
 use morningstar::prostar_mppt as ps;
 use std::{
@@ -43,7 +44,10 @@ impl Connection {
         match self.con {
             Some(ref mut con) => Ok(con),
             None => match ps::Connection::new(&self.device, self.address).await {
-                Err(e) => Err(e),
+                Err(e) => {
+                    warn!("failed to connect to controller {}", e);
+                    Err(e)
+                },
                 Ok(con) => {
                     self.con = Some(con);
                     Ok(self.con.as_mut().unwrap())
@@ -79,6 +83,7 @@ impl Connection {
             match r {
                 Ok(r) => break Ok(r),
                 Err(e) => {
+                    warn!("failed to eval controller command {}", e);
                     if tries >= 4 {
                         break Err(e);
                     } else if tries >= 3 {

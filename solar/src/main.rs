@@ -86,6 +86,7 @@ async fn run_server(config: Config) {
                 Some(m) => m
             }
         };
+        debug!("run_server: {:?}", msg);
         match msg {
             ToMainLoop::FromClient(msg, mut reply) => match msg {
                 FromClient::SetCharging(b) => {
@@ -153,15 +154,18 @@ async fn run_server(config: Config) {
                 }
             },
             ToMainLoop::Tick => {
+                debug!("tick: getting phy");
                 let phy = solar_client::Phy {
                     solar: mb.rpi().solar(),
                     battery: mb.rpi().battery(),
                     master: mb.rpi().master(),
                 };
+                debug!("tick: phy {:?}", phy);
                 let controller = if !phy.master || !phy.battery {
                     None
                 } else {
                     if !initsettings {
+                        debug!("tick: reading initial settings");
                         match mb.read_settings().await {
                             Ok(s) => {
                                 initsettings = true;
@@ -170,6 +174,7 @@ async fn run_server(config: Config) {
                             Err(_) => ()
                         }
                     }
+                    debug!("tick: reading stats");
                     match mb.read_stats().await {
                         Ok(s) => {
                             netidx.update_stats(&s);
@@ -183,6 +188,7 @@ async fn run_server(config: Config) {
                     }
                 };
                 netidx.update_control_phy(&phy);
+                debug!("tick: flushing publisher");
                 match netidx.flush(Duration::from_secs(10)).await {
                     Ok(()) => (),
                     Err(e) => warn!("netidx flush failed {}", e),
@@ -202,6 +208,7 @@ async fn run_server(config: Config) {
                     break
                 );
                 let mut i = 0;
+                debug!("tick: writing stats to tailing clients");
                 while i < tailing.len() {
                     match tailing[i].send(ToClient::Stats(st)).await {
                         Ok(()) => i += 1,
@@ -210,6 +217,7 @@ async fn run_server(config: Config) {
                         }
                     }
                 }
+                debug!("tick: finished");
             }
         }
     }
@@ -330,7 +338,7 @@ fn main() {
                     Err(e) => panic!("failed to daemonize: {}", e),
                 }
             } else {
-                simple_logger::init().expect("failed to init simple logger");
+                simple_logger::init_by_env();
                 Runtime::new().unwrap().block_on(run_server(config))
             }
         }
