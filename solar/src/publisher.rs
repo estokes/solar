@@ -824,7 +824,7 @@ impl Netidx {
         let auth = cfg
             .netidx_spn
             .clone()
-            .map(|s| Auth::Krb5 { spn: Some(s), upn: cfg.netidx_upn.clone() })
+            .map(|s| Auth::Krb5 { spn: Some(s), upn: None })
             .unwrap_or(Auth::Anonymous);
         info!("create publisher");
         let publisher = Publisher::new(resolver, auth, bindcfg).await?;

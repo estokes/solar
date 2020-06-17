@@ -13,4 +13,4 @@ serde_json = "1.0"
 serde_derive = "1.0"
 chrono = "0.4"
 libflate = "1"
-log = "0.4"
+log = { version = "0.4", features = ["serde"]}

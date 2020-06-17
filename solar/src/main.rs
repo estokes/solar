@@ -328,7 +328,7 @@ fn main() {
             if daemonize {
                 syslog::init(
                     syslog::Facility::LOG_DAEMON,
-                    log::LevelFilter::Warn,
+                    config.log_level,
                     Some("solar"),
                 )
                 .expect("failed to init syslog");
@@ -338,7 +338,9 @@ fn main() {
                     Err(e) => panic!("failed to daemonize: {}", e),
                 }
             } else {
-                simple_logger::init_by_env();
+                if let Some(level) = config.log_level.to_level() {
+                    simple_logger::init_with_level(level).unwrap();
+                }
                 Runtime::new().unwrap().block_on(run_server(config))
             }
         }
