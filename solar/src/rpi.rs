@@ -53,7 +53,8 @@ impl Relays {
     }
 }
 
-use std::{time::Duration, thread};
+use std::time::Duration;
+use tokio::time;
 
 const SOLAR: Relay = Relay::R2;
 const BATTERY: Relay = Relay::R1;
@@ -64,68 +65,69 @@ const DELAY_REBOOT: Duration = Duration::from_secs(15);
 pub struct Rpi(Relays);
 
 impl Rpi {
-    pub fn new() -> Result<Rpi> {
+    pub async fn new() -> Result<Rpi> {
         let mut relays = Relays::new()?;
         // start in a known and safe state
         relays.off(MASTER);
         relays.off(BATTERY);
         relays.off(SOLAR);
+        time::delay_for(DELAY_RELAY).await;
         Ok(Rpi(relays))
     }
 
-    pub fn mpptc_enable(&mut self) {
+    pub async fn mpptc_enable(&mut self) {
         self.0.on(BATTERY);
         // allow the relay to flip on
-        thread::sleep(DELAY_RELAY);
+        time::delay_for(DELAY_RELAY).await;
         self.0.on(MASTER);
         // allow the controller to boot up
-        thread::sleep(DELAY_REBOOT);
+        time::delay_for(DELAY_REBOOT).await;
         self.0.on(SOLAR);
     }
 
-    pub fn mpptc_disable(&mut self) {
+    pub async fn mpptc_disable(&mut self) {
         self.0.off(MASTER);
         // allow the relay to flip, and the voltage converter to drain
-        thread::sleep(DELAY_RELAY);
+        time::delay_for(DELAY_RELAY).await;
         self.0.off(SOLAR);
         self.0.off(BATTERY);
     }
 
-    pub fn mpptc_reboot(&mut self) {
-        self.mpptc_disable();
-        self.mpptc_enable();
+    pub async fn mpptc_reboot(&mut self) {
+        self.mpptc_disable().await;
+        self.mpptc_enable().await;
     }
 
     // the voltage converter will literally explode if it is allowed
     // to run without a load, so we must turn it off if we ever turn
     // off both loads
-    fn disable_non_master(&mut self, to_disable: Relay, other: Relay) {
+    async fn disable_non_master(&mut self, to_disable: Relay, other: Relay) {
         if self.0.get(other).is_set_low() {
             self.0.off(MASTER);
             // allow the voltage converter to switch off and drain
-            thread::sleep(DELAY_RELAY);
+            time::delay_for(DELAY_RELAY).await;
         }
         self.0.off(to_disable)
     }
 
-    fn enable_non_master(&mut self, to_enable: Relay) {
+    async fn enable_non_master(&mut self, to_enable: Relay) {
         self.0.on(to_enable);
-        thread::sleep(DELAY_RELAY);
+        time::delay_for(DELAY_RELAY).await;
     }
 
-    pub fn set_solar(&mut self, b: bool) {
+    pub async fn set_solar(&mut self, b: bool) {
         if b {
-            self.enable_non_master(SOLAR);
+            self.enable_non_master(SOLAR).await;
         } else {
-            self.disable_non_master(SOLAR, BATTERY);
+            self.disable_non_master(SOLAR, BATTERY).await;
         }
     }
 
-    pub fn set_battery(&mut self, b: bool) {
+    pub async fn set_battery(&mut self, b: bool) {
         if b {
-            self.enable_non_master(BATTERY);
+            self.enable_non_master(BATTERY).await;
         } else {
-            self.disable_non_master(BATTERY, SOLAR);
+            self.disable_non_master(BATTERY, SOLAR).await;
         }
     }
 

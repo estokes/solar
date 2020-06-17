@@ -1,11 +1,8 @@
 use crate::rpi::Rpi;
-use log::warn;
 use anyhow::Result;
+use log::warn;
 use morningstar::prostar_mppt as ps;
-use std::{
-    ops::Drop,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 use tokio::time;
 
 pub struct Connection {
@@ -23,20 +20,14 @@ enum Command<'a> {
     WriteSettings(&'a ps::Settings),
 }
 
-impl Drop for Connection {
-    fn drop(&mut self) {
-        self.rpi.mpptc_disable();
-    }
-}
-
 impl Connection {
-    pub fn new(device: String, address: u8) -> Self {
+    pub async fn new(device: String, address: u8) -> Self {
         let mut rpi = log_fatal!(
-            Rpi::new(),
+            Rpi::new().await,
             "failed to init gpio {}",
             panic!("failed to init gpio")
         );
-        rpi.mpptc_enable();
+        rpi.mpptc_enable().await;
         Connection { rpi, con: None, device, address, last_command: Instant::now() }
     }
 
@@ -47,7 +38,7 @@ impl Connection {
                 Err(e) => {
                     warn!("failed to connect to controller {}", e);
                     Err(e)
-                },
+                }
                 Ok(con) => {
                     self.con = Some(con);
                     Ok(self.con.as_mut().unwrap())
@@ -88,7 +79,7 @@ impl Connection {
                         break Err(e);
                     } else if tries >= 3 {
                         self.con = None;
-                        self.rpi.mpptc_reboot();
+                        self.rpi.mpptc_reboot().await;
                         tries += 1
                     } else {
                         time::delay_for(Duration::from_millis(1000)).await;
@@ -101,7 +92,7 @@ impl Connection {
     }
 
     async fn wait_for_throttle(&mut self) {
-        let throttle = Duration::from_secs(1);
+        let throttle = Duration::from_secs(2);
         let now = Instant::now();
         let elapsed = now - self.last_command;
         if elapsed < throttle {

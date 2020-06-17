@@ -70,7 +70,7 @@ async fn run_server(config: Config) {
     let (to_main, receiver) = channel(100);
     let mut receiver = receiver.fuse();
     let mut log = log_fatal!(open_log(&config).await, "failed to open log {}", return);
-    let mut mb = modbus::Connection::new(config.device.clone(), config.modbus_id);
+    let mut mb = modbus::Connection::new(config.device.clone(), config.modbus_id).await;
     let mut tick = time::interval(Duration::from_secs(config.stats_interval)).fuse();
     control_socket::run_server(&config, to_main.clone());
     let netidx =
@@ -98,11 +98,11 @@ async fn run_server(config: Config) {
                         .await
                 }
                 FromClient::SetPhySolar(b) => {
-                    mb.rpi_mut().set_solar(b);
+                    mb.rpi_mut().set_solar(b).await;
                     let _ = reply.send(ToClient::Ok);
                 }
                 FromClient::SetPhyBattery(b) => {
-                    mb.rpi_mut().set_battery(b);
+                    mb.rpi_mut().set_battery(b).await;
                     let _ = reply.send(ToClient::Ok);
                 }
                 FromClient::SetPhyMaster(b) => {
