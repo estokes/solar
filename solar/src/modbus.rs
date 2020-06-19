@@ -5,7 +5,7 @@ use morningstar::prostar_mppt as ps;
 use std::time::{Duration, Instant};
 use tokio::time;
 
-static CMDTO: Duration = Duration::from_secs(5);
+static CMDTO: Duration = Duration::from_secs(30);
 
 pub struct Connection {
     rpi: Rpi,
