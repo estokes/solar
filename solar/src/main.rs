@@ -99,19 +99,19 @@ async fn run_server(config: Config) {
                 }
                 FromClient::SetPhySolar(b) => {
                     mb.rpi_mut().set_solar(b).await;
-                    let _ = reply.send(ToClient::Ok);
+                    reply.send(ToClient::Ok).await.ok();
                 }
                 FromClient::SetPhyBattery(b) => {
                     mb.rpi_mut().set_battery(b).await;
-                    let _ = reply.send(ToClient::Ok);
+                    reply.send(ToClient::Ok).await.ok();
                 }
                 FromClient::SetPhyMaster(b) => {
                     if mb.rpi_mut().set_master(b) == b {
-                        let _ = reply.send(ToClient::Ok);
+                        reply.send(ToClient::Ok).await.ok();
                     } else {
-                        let _ = reply.send(ToClient::Err(
+                        reply.send(ToClient::Err(
                             "design rules prohibit setting the master relay".into(),
-                        ));
+                        )).await.ok();
                     }
                 }
                 FromClient::ResetController => {
@@ -137,18 +137,18 @@ async fn run_server(config: Config) {
                 FromClient::ReadSettings => match mb.read_settings().await {
                     Ok(s) => {
                         netidx.update_settings(&s);
-                        let _ = reply.send(ToClient::Settings(s)).await;
+                        reply.send(ToClient::Settings(s)).await.ok();
                     }
                     Err(e) => {
-                        let _ = reply.send(ToClient::Err(e.to_string())).await;
+                        reply.send(ToClient::Err(e.to_string())).await.ok();
                     }
                 },
                 FromClient::DayMode => {
-                    let _ = mb.read_stats().await;
-                    let _ = reply.send(ToClient::Ok).await;
+                    mb.read_stats().await.ok();
+                    reply.send(ToClient::Ok).await.ok();
                 }
                 FromClient::Stop => {
-                    let _ = reply.send(ToClient::Ok).await;
+                    reply.send(ToClient::Ok).await.ok();
                     time::delay_for(Duration::from_millis(200)).await;
                     break;
                 }
