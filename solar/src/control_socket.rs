@@ -1,5 +1,5 @@
 use crate::ToMainLoop;
-use anyhow::Error;
+use anyhow::{Result, Error};
 use futures::prelude::*;
 use serde_json;
 use solar_client::{Config, FromClient};
@@ -19,7 +19,7 @@ async fn client_loop(stream: UnixStream, mut to_main: Sender<ToMainLoop>) {
     let mut stream = BufStream::new(stream);
     let mut line = String::new();
     let mut buf = Vec::new();
-    let res = loop {
+    let res: Result<()> = loop {
         line.clear();
         debug!("client loop waiting for line");
         try_cf!(stream.read_line(&mut line).await);
