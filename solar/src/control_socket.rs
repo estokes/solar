@@ -21,25 +21,28 @@ async fn client_loop(stream: UnixStream, mut to_main: Sender<ToMainLoop>) {
     let mut buf = Vec::new();
     let res = loop {
         line.clear();
-        trace!("client loop waiting for line");
+        debug!("client loop waiting for line");
         try_cf!(stream.read_line(&mut line).await);
         let m: FromClient = try_cf!(serde_json::from_str(&line));
-        trace!("client loop message from client: {:?}", m);
+        debug!("client loop message from client: {:?}", m);
         let (send_reply, mut recv_reply) = channel(100);
         try_cf!(to_main.send(ToMainLoop::FromClient(m, send_reply)).await);
-        break loop {
+        try_cf!(loop {
             buf.clear();
             match recv_reply.next().await {
-                None => break Ok(()),
+                None => {
+                    debug!("no more replies for this query");
+                    break Ok(())
+                },
                 Some(s) => {
-                    trace!("reply to client {:?}", s);
+                    debug!("reply to client {:?}", s);
                     try_cf!(serde_json::to_writer(&mut buf, &s));
                     buf.push(b'\n');
                     try_cf!(try_cf!(time::timeout(STO, stream.write_all(&buf)).await));
                     try_cf!(try_cf!(time::timeout(STO, stream.flush()).await));
                 }
             }
-        };
+        });
     };
     info!("client loop shutting down {:?}", res);
 }
