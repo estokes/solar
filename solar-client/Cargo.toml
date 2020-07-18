@@ -5,7 +5,7 @@ authors = ["Eric Stokes <letaris@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-netidx = "0.2"
+netidx = "0.3"
 anyhow = "1"
 morningstar = "0.3"
 serde = "1.0"
