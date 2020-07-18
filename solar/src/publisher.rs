@@ -7,11 +7,12 @@ use netidx::{
     self,
     chars::Chars,
     path::Path,
-    publisher::{Batch, BindCfg, Publisher, Val, Value},
+    publisher::{BindCfg, Publisher, Val, Value, Id},
+    pool::Pooled,
     resolver::Auth,
 };
 use parking_lot::Mutex;
-use solar_client::{Config, FromClient, Phy, ToClient};
+use solar_client::{Config, FromClient, ToClient};
 use std::{sync::Arc, time::Duration};
 use tokio::{
     sync::mpsc::{self, Sender},
@@ -486,7 +487,7 @@ impl PublishedSettings {
             .update(Value::F32(set.charge_current_limit.get::<ampere>()));
     }
 
-    fn register_writable(&self, channel: fmpsc::Sender<Batch>) {
+    fn register_writable(&self, channel: fmpsc::Sender<Pooled<Vec<(Id, Value)>>>) {
         self.regulation_voltage.writes(channel.clone());
         self.float_voltage.writes(channel.clone());
         self.time_before_float.writes(channel.clone());
@@ -524,7 +525,7 @@ impl PublishedSettings {
         self.charge_current_limit.writes(channel);
     }
 
-    fn process_writes(&self, mut batch: Batch, p: &mut Settings) {
+    fn process_writes(&self, mut batch: Pooled<Vec<(Id, Value)>>, p: &mut Settings) {
         for (id, v) in batch.drain(..) {
             if id == self.regulation_voltage.id() {
                 p.regulation_voltage = ElectricPotential::new::<volt>(f32!(v));
@@ -639,9 +640,6 @@ struct PublishedControl {
     charging: Val,
     load: Val,
     reset: Val,
-    phy_solar: Val,
-    phy_battery: Val,
-    phy_master: Val,
 }
 
 impl PublishedControl {
@@ -650,9 +648,6 @@ impl PublishedControl {
             charging: publisher.publish(base.append("charging"), Value::Null)?,
             load: publisher.publish(base.append("load"), Value::Null)?,
             reset: publisher.publish(base.append("reset"), Value::Null)?,
-            phy_solar: publisher.publish(base.append("phy_solar"), Value::Null)?,
-            phy_battery: publisher.publish(base.append("phy_battery"), Value::Null)?,
-            phy_master: publisher.publish(base.append("phy_master"), Value::Null)?,
         })
     }
 
@@ -682,31 +677,13 @@ impl PublishedControl {
         });
     }
 
-    fn update_phy(&self, phy: &Phy) {
-        self.phy_solar.update(match phy.solar {
-            true => Value::True,
-            false => Value::False,
-        });
-        self.phy_battery.update(match phy.battery {
-            true => Value::True,
-            false => Value::False,
-        });
-        self.phy_master.update(match phy.master {
-            true => Value::True,
-            false => Value::False,
-        });
-    }
-
-    fn register_writable(&self, channel: fmpsc::Sender<Batch>) {
+    fn register_writable(&self, channel: fmpsc::Sender<Pooled<Vec<(Id, Value)>>>) {
         self.charging.writes(channel.clone());
         self.load.writes(channel.clone());
         self.reset.writes(channel.clone());
-        self.phy_solar.writes(channel.clone());
-        self.phy_battery.writes(channel.clone());
-        self.phy_master.writes(channel);
     }
 
-    fn process_writes(&self, mut batch: Batch) -> Vec<FromClient> {
+    fn process_writes(&self, mut batch: Pooled<Vec<(Id, Value)>>) -> Vec<FromClient> {
         batch
             .drain(..)
             .filter_map(|(id, v)| {
@@ -716,12 +693,6 @@ impl PublishedControl {
                     Some(FromClient::SetLoad(bool!(v)))
                 } else if id == self.reset.id() {
                     Some(FromClient::ResetController)
-                } else if id == self.phy_solar.id() {
-                    Some(FromClient::SetPhySolar(bool!(v)))
-                } else if id == self.phy_battery.id() {
-                    Some(FromClient::SetPhyBattery(bool!(v)))
-                } else if id == self.phy_master.id() {
-                    Some(FromClient::SetPhyMaster(bool!(v)))
                 } else {
                     warn!("control id {:?} not recognized", id);
                     None
@@ -862,12 +833,6 @@ impl Netidx {
         let inner = self.0.lock();
         info!("control stats updated");
         inner.control.update_stats(st);
-    }
-
-    pub(crate) fn update_control_phy(&self, phy: &Phy) {
-        let inner = self.0.lock();
-        info!("phy updated");
-        inner.control.update_phy(phy);
     }
 
     pub(crate) async fn flush(&self, timeout: Duration) -> Result<()> {

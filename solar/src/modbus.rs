@@ -1,4 +1,3 @@
-use crate::rpi::Rpi;
 use anyhow::{Error, Result};
 use log::warn;
 use morningstar::prostar_mppt as ps;
@@ -8,7 +7,6 @@ use tokio::time;
 static CMDTO: Duration = Duration::from_secs(30);
 
 pub struct Connection {
-    rpi: Rpi,
     con: Option<ps::Connection>,
     device: String,
     address: u8,
@@ -24,13 +22,7 @@ enum Command<'a> {
 
 impl Connection {
     pub async fn new(device: String, address: u8) -> Self {
-        let mut rpi = log_fatal!(
-            Rpi::new().await,
-            "failed to init gpio {}",
-            panic!("failed to init gpio")
-        );
-        rpi.mpptc_enable().await;
-        Connection { rpi, con: None, device, address, last_command: Instant::now() }
+        Connection { con: None, device, address, last_command: Instant::now() }
     }
 
     async fn get_con(&mut self) -> Result<&mut ps::Connection> {
@@ -96,10 +88,6 @@ impl Connection {
                     warn!("failed to eval controller command {}", e);
                     if tries >= 4 {
                         break Err(e);
-                    } else if tries >= 3 {
-                        self.con = None;
-                        self.rpi.mpptc_reboot().await;
-                        tries += 1
                     } else {
                         time::delay_for(Duration::from_millis(1000)).await;
                         self.con = None;
@@ -151,13 +139,5 @@ impl Connection {
     pub async fn write_settings(&mut self, settings: &ps::Settings) -> Result<()> {
         self.wait_for_throttle().await;
         Ok(self.eval_command(Command::WriteSettings(settings)).await?)
-    }
-
-    pub fn rpi(&self) -> &Rpi {
-        &self.rpi
-    }
-
-    pub fn rpi_mut(&mut self) -> &mut Rpi {
-        &mut self.rpi
     }
 }

@@ -23,16 +23,12 @@ pub mod archive;
 pub enum FromClient {
     SetCharging(bool),
     SetLoad(bool),
-    SetPhySolar(bool),
-    SetPhyBattery(bool),
-    SetPhyMaster(bool),
     ResetController,
     LogRotated,
     Stop,
     TailStats,
     ReadSettings,
     WriteSettings(ps::Settings),
-    DayMode,
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
@@ -64,21 +60,26 @@ pub enum Stats {
         controller: Option<ps::Stats>,
         phy: Phy,
     },
+    V3 {
+        timestamp: chrono::DateTime<chrono::offset::Local>,
+        controller: Option<ps::Stats>,
+    }
 }
 
 impl Stats {
     fn upgrade(self) -> Self {
         match self {
-            Stats::V2 { .. } => self,
-            Stats::V1 { controller, phy } => Stats::V2 {
+            Stats::V3 { .. } => self,
+            Stats::V2 { timestamp, controller, phy: _ } => Stats::V3 {
+                timestamp, controller
+            },
+            Stats::V1 { controller, phy: _ } => Stats::V3 {
                 timestamp: controller.timestamp,
                 controller: Some(controller),
-                phy,
             },
-            Stats::V0(st) => Stats::V2 {
+            Stats::V0(st) => Stats::V3 {
                 timestamp: st.timestamp,
                 controller: Some(st),
-                phy: Phy { solar: true, battery: true, master: true },
             },
         }
     }
@@ -88,6 +89,7 @@ impl Stats {
             Stats::V0(ref s) => s.timestamp,
             Stats::V1 { controller: ref c, .. } => c.timestamp,
             Stats::V2 { ref timestamp, .. } => *timestamp,
+            Stats::V3 { ref timestamp, .. } => *timestamp,
         }
     }
 
@@ -96,6 +98,7 @@ impl Stats {
             Stats::V0(ref mut s) => &mut s.timestamp,
             Stats::V1 { controller: ref mut c, .. } => &mut c.timestamp,
             Stats::V2 { ref mut timestamp, .. } => timestamp,
+            Stats::V3 { ref mut timestamp, .. } => timestamp,
         }
     }
 }
@@ -115,6 +118,13 @@ impl fmt::Display for Stats {
                     None => write!(fmt, "controller off")?,
                 }
                 phy.fmt(fmt)
+            }
+            Stats::V3 { timestamp, controller } => {
+                timestamp.fmt(fmt)?;
+                match controller {
+                    Some(s) => s.fmt(fmt),
+                    None => write!(fmt, "controller off"),
+                }
             }
         }
     }

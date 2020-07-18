@@ -1,5 +1,4 @@
 #![recursion_limit = "1024"]
-#[macro_use]
 extern crate serde_derive;
 #[macro_use]
 extern crate log;
@@ -21,7 +20,6 @@ macro_rules! log_fatal {
 mod control_socket;
 mod modbus;
 mod publisher;
-mod rpi;
 
 use anyhow::Result;
 use daemonize::Daemonize;
@@ -97,23 +95,6 @@ async fn run_server(config: Config) {
                     send_reply(mb.write_coil(ps::Coil::LoadDisconnect, !b).await, reply)
                         .await
                 }
-                FromClient::SetPhySolar(b) => {
-                    mb.rpi_mut().set_solar(b).await;
-                    reply.send(ToClient::Ok).await.ok();
-                }
-                FromClient::SetPhyBattery(b) => {
-                    mb.rpi_mut().set_battery(b).await;
-                    reply.send(ToClient::Ok).await.ok();
-                }
-                FromClient::SetPhyMaster(b) => {
-                    if mb.rpi_mut().set_master(b) == b {
-                        reply.send(ToClient::Ok).await.ok();
-                    } else {
-                        reply.send(ToClient::Err(
-                            "design rules prohibit setting the master relay".into(),
-                        )).await.ok();
-                    }
-                }
                 FromClient::ResetController => {
                     send_reply(mb.write_coil(ps::Coil::ResetControl, true).await, reply)
                         .await
@@ -143,10 +124,6 @@ async fn run_server(config: Config) {
                         reply.send(ToClient::Err(e.to_string())).await.ok();
                     }
                 },
-                FromClient::DayMode => {
-                    mb.read_stats().await.ok();
-                    reply.send(ToClient::Ok).await.ok();
-                }
                 FromClient::Stop => {
                     reply.send(ToClient::Ok).await.ok();
                     time::delay_for(Duration::from_millis(200)).await;
@@ -154,16 +131,7 @@ async fn run_server(config: Config) {
                 }
             },
             ToMainLoop::Tick => {
-                debug!("tick: getting phy");
-                let phy = solar_client::Phy {
-                    solar: mb.rpi().solar(),
-                    battery: mb.rpi().battery(),
-                    master: mb.rpi().master(),
-                };
-                debug!("tick: phy {:?}", phy);
-                let controller = if !phy.master || !phy.battery {
-                    None
-                } else {
+                let controller = {
                     if !initsettings {
                         debug!("tick: reading initial settings");
                         match mb.read_settings().await {
@@ -187,14 +155,13 @@ async fn run_server(config: Config) {
                         }
                     }
                 };
-                netidx.update_control_phy(&phy);
                 debug!("tick: flushing publisher");
                 match netidx.flush(Duration::from_secs(10)).await {
                     Ok(()) => (),
                     Err(e) => warn!("netidx flush failed {}", e),
                 }
                 let timestamp = chrono::Local::now();
-                let st = Stats::V2 { timestamp, controller, phy };
+                let st = Stats::V3 { timestamp, controller };
                 statsbuf.clear();
                 log_fatal!(
                     serde_json::to_writer(&mut statsbuf, &st),
@@ -241,16 +208,6 @@ impl OnOff {
 }
 
 #[derive(Debug, StructOpt)]
-enum Phy {
-    #[structopt(name = "solar", help = "enable/disable solar panels")]
-    Solar(OnOff),
-    #[structopt(name = "battery", help = "enable/disable battery")]
-    Battery(OnOff),
-    #[structopt(name = "master", help = "enable/disable master")]
-    Master(OnOff),
-}
-
-#[derive(Debug, StructOpt)]
 enum Settings {
     #[structopt(name = "read", help = "read charge controller settings")]
     Read {
@@ -274,8 +231,6 @@ enum SubCommand {
     Load(OnOff),
     #[structopt(name = "charging")]
     Charging(OnOff),
-    #[structopt(name = "phy")]
-    Phy(Phy),
     #[structopt(name = "cancel-float")]
     CancelFloat,
     #[structopt(name = "archive", help = "archive todays log file")]
@@ -294,10 +249,6 @@ enum SubCommand {
     },
     #[structopt(name = "settings", help = "read/write charge controller settings")]
     Settings(Settings),
-    #[structopt(name = "night", help = "night power save mode")]
-    Night,
-    #[structopt(name = "day", help = "day power gen mode")]
-    Day,
 }
 
 #[derive(Debug, StructOpt)]
@@ -426,24 +377,5 @@ fn main() {
             solar_client::send_command(&config, once(FromClient::WriteSettings(settings)))
                 .expect("failed to write settings")
         }
-        SubCommand::Phy(Phy::Solar(v)) => {
-            solar_client::send_command(&config, once(FromClient::SetPhySolar(v.get())))
-                .expect("failed to set physical solar")
-        }
-        SubCommand::Phy(Phy::Battery(v)) => {
-            solar_client::send_command(&config, once(FromClient::SetPhyBattery(v.get())))
-                .expect("failed to set physical battery")
-        }
-        SubCommand::Phy(Phy::Master(v)) => {
-            solar_client::send_command(&config, once(FromClient::SetPhyMaster(v.get())))
-                .expect("failed to set physical battery")
-        }
-        SubCommand::Night => solar_client::send_command(
-            &config,
-            &[FromClient::SetPhySolar(false), FromClient::SetPhyBattery(false)],
-        )
-        .expect("failed to enter night mode"),
-        SubCommand::Day => solar_client::send_command(&config, once(FromClient::DayMode))
-            .expect("failed to enter day mode"),
     }
 }
