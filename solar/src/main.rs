@@ -146,7 +146,7 @@ async fn run_server(config: Config) {
                     match mb.read_stats().await {
                         Ok(s) => {
                             netidx.update_stats(&s);
-                            netidx.update_control_stats(&s);
+                            netidx.update_control(&s);
                             Some(s)
                         },
                         Err(e) => {
