@@ -8,7 +8,7 @@ use netidx::{
     chars::Chars,
     path::Path,
     pool::Pooled,
-    publisher::{BindCfg, Id, Publisher, Val, Value},
+    publisher::{BindCfg, Publisher, Val, Value, WriteRequest},
     resolver::Auth,
 };
 use parking_lot::Mutex;
@@ -277,11 +277,15 @@ impl PublishedStats {
 }
 
 macro_rules! f32 {
-    ($v:expr) => {
-        match $v {
+    ($r:expr) => {
+        match $r.value {
             Value::F32(v) => v,
             v => {
-                warn!("{:?} not accepted, expected F32", v);
+                let m = format!("{:?} not accepted, expected F32", v);
+                warn!("{}", &m);
+                if let Some(reply) = $r.send_result {
+                    reply.send(Value::Error(Chars::from(m)));
+                }
                 continue;
             }
         }
@@ -289,12 +293,16 @@ macro_rules! f32 {
 }
 
 macro_rules! bool {
-    ($v:expr) => {
-        match $v {
+    ($r:expr) => {
+        match $r.value {
             Value::True => true,
             Value::False => false,
             v => {
-                warn!("{:?} not accepted, expected bool", v);
+                let m = format!("{:?} not accepted, expected bool", v);
+                warn!("{}", &m);
+                if let Some(reply) = $r.send_result {
+                    reply.send(Value::Error(Chars::from(m)));
+                }
                 return None;
             }
         }
@@ -515,7 +523,7 @@ impl PublishedSettings {
             .update_changed(Value::F32(set.charge_current_limit.get::<ampere>()));
     }
 
-    fn register_writable(&self, channel: fmpsc::Sender<Pooled<Vec<(Id, Value)>>>) {
+    fn register_writable(&self, channel: fmpsc::Sender<Pooled<Vec<WriteRequest>>>) {
         self.regulation_voltage.writes(channel.clone());
         self.float_voltage.writes(channel.clone());
         self.time_before_float.writes(channel.clone());
@@ -553,112 +561,128 @@ impl PublishedSettings {
         self.charge_current_limit.writes(channel);
     }
 
-    fn process_writes(&self, mut batch: Pooled<Vec<(Id, Value)>>, p: &mut Settings) {
-        for (id, v) in batch.drain(..) {
-            if id == self.regulation_voltage.id() {
-                p.regulation_voltage = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.float_voltage.id() {
-                p.float_voltage = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.time_before_float.id() {
-                p.time_before_float = Time::new::<second>(f32!(v));
-            } else if id == self.time_before_float_low_battery.id() {
-                p.time_before_float_low_battery = Time::new::<second>(f32!(v));
-            } else if id == self.float_low_battery_voltage_trigger.id() {
+    fn process_writes(&self, mut batch: Pooled<Vec<WriteRequest>>, p: &mut Settings) {
+        for r in batch.drain(..) {
+            if r.id == self.regulation_voltage.id() {
+                p.regulation_voltage = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.float_voltage.id() {
+                p.float_voltage = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.time_before_float.id() {
+                p.time_before_float = Time::new::<second>(f32!(r));
+            } else if r.id == self.time_before_float_low_battery.id() {
+                p.time_before_float_low_battery = Time::new::<second>(f32!(r));
+            } else if r.id == self.float_low_battery_voltage_trigger.id() {
                 p.float_low_battery_voltage_trigger =
-                    ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.float_cancel_voltage.id() {
-                p.float_cancel_voltage = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.exit_float_time.id() {
-                p.exit_float_time = Time::new::<minute>(f32!(v));
-            } else if id == self.equalize_voltage.id() {
-                p.equalize_voltage = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.days_between_equalize_cycles.id() {
-                p.days_between_equalize_cycles = Time::new::<day>(f32!(v));
-            } else if id == self.equalize_time_limit_above_regulation_voltage.id() {
+                    ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.float_cancel_voltage.id() {
+                p.float_cancel_voltage = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.exit_float_time.id() {
+                p.exit_float_time = Time::new::<minute>(f32!(r));
+            } else if r.id == self.equalize_voltage.id() {
+                p.equalize_voltage = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.days_between_equalize_cycles.id() {
+                p.days_between_equalize_cycles = Time::new::<day>(f32!(r));
+            } else if r.id == self.equalize_time_limit_above_regulation_voltage.id() {
                 p.equalize_time_limit_above_regulation_voltage =
-                    Time::new::<minute>(f32!(v));
-            } else if id == self.equalize_time_limit_at_regulation_voltage.id() {
+                    Time::new::<minute>(f32!(r));
+            } else if r.id == self.equalize_time_limit_at_regulation_voltage.id() {
                 p.equalize_time_limit_at_regulation_voltage =
-                    Time::new::<minute>(f32!(v));
-            } else if id == self.alarm_on_setting_change.id() {
-                p.alarm_on_setting_change = match v {
+                    Time::new::<minute>(f32!(r));
+            } else if r.id == self.alarm_on_setting_change.id() {
+                p.alarm_on_setting_change = match r.value {
                     Value::True => true,
                     Value::False => false,
                     v => {
-                        warn!("{:?} not accepted, expected bool", v);
+                        let m = format!("{:?} not accepted, expected bool", v);
+                        warn!("{}", &m);
+                        if let Some(reply) = r.send_result {
+                            reply.send(Value::Error(Chars::from(m)));
+                        }
                         continue;
                     }
-                };
-            } else if id == self.reference_charge_voltage_limit.id() {
+                }
+            } else if r.id == self.reference_charge_voltage_limit.id() {
                 p.reference_charge_voltage_limit =
-                    ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.battery_charge_current_limit.id() {
-                p.battery_charge_current_limit = ElectricCurrent::new::<ampere>(f32!(v));
-            } else if id == self.temperature_compensation_coefficent.id() {
+                    ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.battery_charge_current_limit.id() {
+                p.battery_charge_current_limit = ElectricCurrent::new::<ampere>(f32!(r));
+            } else if r.id == self.temperature_compensation_coefficent.id() {
                 p.temperature_compensation_coefficent =
-                    ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.high_voltage_disconnect.id() {
-                p.high_voltage_disconnect = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.high_voltage_reconnect.id() {
-                p.high_voltage_reconnect = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.maximum_charge_voltage_reference.id() {
+                    ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.high_voltage_disconnect.id() {
+                p.high_voltage_disconnect = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.high_voltage_reconnect.id() {
+                p.high_voltage_reconnect = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.maximum_charge_voltage_reference.id() {
                 p.maximum_charge_voltage_reference =
-                    ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.max_battery_temp_compensation_limit.id() {
+                    ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.max_battery_temp_compensation_limit.id() {
                 p.max_battery_temp_compensation_limit =
-                    ThermodynamicTemperature::new::<degree_celsius>(f32!(v));
-            } else if id == self.min_battery_temp_compensation_limit.id() {
+                    ThermodynamicTemperature::new::<degree_celsius>(f32!(r));
+            } else if r.id == self.min_battery_temp_compensation_limit.id() {
                 p.min_battery_temp_compensation_limit =
-                    ThermodynamicTemperature::new::<degree_celsius>(f32!(v));
-            } else if id == self.load_low_voltage_disconnect.id() {
-                p.load_low_voltage_disconnect = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.load_low_voltage_reconnect.id() {
-                p.load_low_voltage_reconnect = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.load_high_voltage_disconnect.id() {
-                p.load_high_voltage_disconnect = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.load_high_voltage_reconnect.id() {
-                p.load_high_voltage_reconnect = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.lvd_load_current_compensation.id() {
+                    ThermodynamicTemperature::new::<degree_celsius>(f32!(r));
+            } else if r.id == self.load_low_voltage_disconnect.id() {
+                p.load_low_voltage_disconnect = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.load_low_voltage_reconnect.id() {
+                p.load_low_voltage_reconnect = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.load_high_voltage_disconnect.id() {
+                p.load_high_voltage_disconnect = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.load_high_voltage_reconnect.id() {
+                p.load_high_voltage_reconnect = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.lvd_load_current_compensation.id() {
                 p.lvd_load_current_compensation =
-                    ElectricalResistance::new::<ohm>(f32!(v));
-            } else if id == self.lvd_warning_timeout.id() {
-                p.lvd_warning_timeout = Time::new::<second>(f32!(v));
-            } else if id == self.led_green_to_green_and_yellow_limit.id() {
+                    ElectricalResistance::new::<ohm>(f32!(r));
+            } else if r.id == self.lvd_warning_timeout.id() {
+                p.lvd_warning_timeout = Time::new::<second>(f32!(r));
+            } else if r.id == self.led_green_to_green_and_yellow_limit.id() {
                 p.led_green_to_green_and_yellow_limit =
-                    ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.led_green_and_yellow_to_yellow_limit.id() {
+                    ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.led_green_and_yellow_to_yellow_limit.id() {
                 p.led_green_and_yellow_to_yellow_limit =
-                    ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.led_yellow_to_yellow_and_red_limit.id() {
+                    ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.led_yellow_to_yellow_and_red_limit.id() {
                 p.led_yellow_to_yellow_and_red_limit =
-                    ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.led_yellow_and_red_to_red_flashing_limit.id() {
+                    ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.led_yellow_and_red_to_red_flashing_limit.id() {
                 p.led_yellow_and_red_to_red_flashing_limit =
-                    ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.modbus_id.id() {
-                p.modbus_id = match v {
+                    ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.modbus_id.id() {
+                p.modbus_id = match r.value {
                     Value::U32(v) => v as u8,
                     v => {
-                        warn!("{:?} was not accepted, expected U32", v);
+                        let m = format!("{:?} was not accepted, expected U32", v);
+                        warn!("{}", &m);
+                        if let Some(reply) = r.send_result {
+                            reply.send(Value::Error(Chars::from(m)));
+                        }
                         continue;
                     }
                 };
-            } else if id == self.meterbus_id.id() {
-                p.meterbus_id = match v {
+            } else if r.id == self.meterbus_id.id() {
+                p.meterbus_id = match r.value {
                     Value::U32(v) => v as u8,
                     v => {
-                        warn!("{:?} was not accepted, expected U32", v);
+                        let m = format!("{:?} was not accepted, expected U32", v);
+                        warn!("{}", &m);
+                        if let Some(reply) = r.send_result {
+                            reply.send(Value::Error(Chars::from(m)));
+                        }
                         continue;
                     }
                 };
-            } else if id == self.mppt_fixed_vmp.id() {
-                p.mppt_fixed_vmp = ElectricPotential::new::<volt>(f32!(v));
-            } else if id == self.mppt_fixed_vmp_percent.id() {
-                p.mppt_fixed_vmp_percent = f32!(v);
-            } else if id == self.charge_current_limit.id() {
-                p.charge_current_limit = ElectricCurrent::new::<ampere>(f32!(v));
+            } else if r.id == self.mppt_fixed_vmp.id() {
+                p.mppt_fixed_vmp = ElectricPotential::new::<volt>(f32!(r));
+            } else if r.id == self.mppt_fixed_vmp_percent.id() {
+                p.mppt_fixed_vmp_percent = f32!(r);
+            } else if r.id == self.charge_current_limit.id() {
+                p.charge_current_limit = ElectricCurrent::new::<ampere>(f32!(r));
             } else {
-                warn!("unknown settings field {:?}", id)
+                let m = format!("unknown settings field {:?}", r.id);
+                warn!("{}", &m);
+                if let Some(reply) = r.send_result {
+                    reply.send(Value::Error(Chars::from(m)))
+                }
             }
         }
     }
@@ -705,24 +729,28 @@ impl PublishedControl {
         });
     }
 
-    fn register_writable(&self, channel: fmpsc::Sender<Pooled<Vec<(Id, Value)>>>) {
+    fn register_writable(&self, channel: fmpsc::Sender<Pooled<Vec<WriteRequest>>>) {
         self.charging.writes(channel.clone());
         self.load.writes(channel.clone());
         self.reset.writes(channel.clone());
     }
 
-    fn process_writes(&self, mut batch: Pooled<Vec<(Id, Value)>>) -> Vec<FromClient> {
+    fn process_writes(&self, mut batch: Pooled<Vec<WriteRequest>>) -> Vec<FromClient> {
         batch
             .drain(..)
-            .filter_map(|(id, v)| {
-                if id == self.charging.id() {
-                    Some(FromClient::SetCharging(bool!(v)))
-                } else if id == self.load.id() {
-                    Some(FromClient::SetLoad(bool!(v)))
-                } else if id == self.reset.id() {
+            .filter_map(|r| {
+                if r.id == self.charging.id() {
+                    Some(FromClient::SetCharging(bool!(r)))
+                } else if r.id == self.load.id() {
+                    Some(FromClient::SetLoad(bool!(r)))
+                } else if r.id == self.reset.id() {
                     Some(FromClient::ResetController)
                 } else {
-                    warn!("control id {:?} not recognized", id);
+                    let m = format!("control id {:?} not recognized", r.id);
+                    warn!("{}", &m);
+                    if let Some(reply) = r.send_result {
+                        reply.send(Value::Error(Chars::from(m)));
+                    }
                     None
                 }
             })
