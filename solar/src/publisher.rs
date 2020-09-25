@@ -182,8 +182,9 @@ impl PublishedStats {
     }
 
     fn update(&self, st: &Stats) {
+        use chrono::prelude::*;
         self.timestamp
-            .update_changed(Value::String(Chars::from(st.timestamp.to_string())));
+            .update_changed(Value::DateTime(DateTime::<Utc>::from(st.timestamp)));
         self.software_version.update_changed(Value::V32(st.software_version as u32));
         self.battery_voltage_settings_multiplier
             .update(Value::V32(st.battery_voltage_settings_multiplier as u32));
