@@ -5,7 +5,7 @@ authors = ["Eric Stokes <letaris@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-netidx = { path = "../../netidx" }
+netidx = "0.8"
 anyhow = "1"
 morningstar = "0.3"
 serde = "1.0"

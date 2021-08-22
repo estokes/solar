@@ -1,12 +1,12 @@
 [package]
 name = "solar"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Eric Stokes <letaris@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-netidx = { path = "../../netidx" }
-tokio = { version = "0.2", features = ["full"] }
+netidx = "0.8"
+tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 anyhow = "1"
 daemonize = "0.4"
@@ -20,5 +20,5 @@ solar-client = { path = "../solar-client" }
 structopt = "0.3"
 syslog = "5"
 chrono = "0.4"
-uom = "0.28"
-parking_lot = "0.10"
+uom = "0.31"
+parking_lot = "0.11"
