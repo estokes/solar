@@ -52,10 +52,11 @@ async fn accept_loop(path: PathBuf, to_main: Sender<ToMainLoop>) {
         "failed to create control socket {}",
         return
     );
-    while let Ok((client, _addr)) = listener.accept().await {
-        task::spawn(client_loop(client, to_main.clone()));
+    loop {
+        if let Ok((client, _addr)) = listener.accept().await {
+            task::spawn(client_loop(client, to_main.clone()));
+        }
     }
-    info!("client accept loop shutting down");
 }
 
 pub(crate) fn run_server(cfg: &Config, to_main: Sender<ToMainLoop>) {
