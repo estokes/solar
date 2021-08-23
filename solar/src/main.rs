@@ -3,7 +3,7 @@ extern crate serde_derive;
 #[macro_use]
 extern crate log;
 #[macro_use]
-extern crate netidx;
+extern crate netidx_core;
 
 macro_rules! log_fatal {
     ($e:expr, $m:expr, $a:expr) => {
@@ -30,8 +30,7 @@ use solar_client::{self, archive, Config, FromClient, Stats, ToClient};
 use std::time::Duration;
 use structopt::StructOpt;
 use tokio::{
-    fs, io,
-    prelude::*,
+    fs, io::{self, AsyncWriteExt},
     runtime::Runtime,
     sync::mpsc::{channel, Sender},
     time,
@@ -53,7 +52,7 @@ async fn open_log(cfg: &Config) -> Result<io::BufWriter<fs::File>, io::Error> {
     Ok(io::BufWriter::new(log))
 }
 
-async fn send_reply(r: Result<()>, mut s: Sender<ToClient>) {
+async fn send_reply(r: Result<()>, s: Sender<ToClient>) {
     match r {
         Ok(()) => {
             let _ = s.send(ToClient::Ok).await;
@@ -65,11 +64,10 @@ async fn send_reply(r: Result<()>, mut s: Sender<ToClient>) {
 }
 
 async fn run_server(config: Config) {
-    let (to_main, receiver) = channel(100);
-    let mut receiver = receiver.fuse();
+    let (to_main, mut receiver) = channel(100);
     let mut log = log_fatal!(open_log(&config).await, "failed to open log {}", return);
     let mut mb = modbus::Connection::new(config.device.clone(), config.modbus_id).await;
-    let mut tick = time::interval(Duration::from_secs(config.stats_interval)).fuse();
+    let mut tick = time::interval(Duration::from_secs(config.stats_interval));
     control_socket::run_server(&config, to_main.clone());
     let netidx =
         log_fatal!(Netidx::new(&config, to_main).await, "init publisher {}", return);
@@ -78,15 +76,15 @@ async fn run_server(config: Config) {
     let mut initsettings = false;
     loop {
         let msg = select_biased! {
-            _ = tick.next() => ToMainLoop::Tick,
-            m = receiver.next() => match m {
+            _ = tick.tick().fuse() => ToMainLoop::Tick,
+            m = receiver.recv().fuse() => match m {
                 None => break,
                 Some(m) => m
             }
         };
         debug!("run_server: {:?}", msg);
         match msg {
-            ToMainLoop::FromClient(msg, mut reply) => match msg {
+            ToMainLoop::FromClient(msg, reply) => match msg {
                 FromClient::SetCharging(b) => {
                     send_reply(mb.write_coil(ps::Coil::ChargeDisconnect, !b).await, reply)
                         .await
@@ -126,7 +124,7 @@ async fn run_server(config: Config) {
                 },
                 FromClient::Stop => {
                     reply.send(ToClient::Ok).await.ok();
-                    time::delay_for(Duration::from_millis(200)).await;
+                    time::sleep(Duration::from_millis(200)).await;
                     break;
                 }
             },
