@@ -1,20 +1,18 @@
 use crate::ToMainLoop;
 use anyhow::{Result, Error};
-use futures::prelude::*;
 use serde_json;
 use solar_client::{Config, FromClient};
 use std::{fs, path::PathBuf, time::Duration};
 use tokio::{
-    io::BufStream,
+    io::{AsyncBufReadExt, AsyncWriteExt, BufStream},
     net::{UnixListener, UnixStream},
-    prelude::*,
     sync::mpsc::{channel, Sender},
     task, time,
 };
 
 static STO: Duration = Duration::from_secs(2);
 
-async fn client_loop(stream: UnixStream, mut to_main: Sender<ToMainLoop>) {
+async fn client_loop(stream: UnixStream, to_main: Sender<ToMainLoop>) {
     trace!("client loop started");
     let mut stream = BufStream::new(stream);
     let mut line = String::new();
@@ -29,7 +27,7 @@ async fn client_loop(stream: UnixStream, mut to_main: Sender<ToMainLoop>) {
         try_cf!(to_main.send(ToMainLoop::FromClient(m, send_reply)).await);
         try_cf!(loop {
             buf.clear();
-            match recv_reply.next().await {
+            match recv_reply.recv().await {
                 None => {
                     debug!("no more replies for this query");
                     break Ok(())
@@ -49,23 +47,16 @@ async fn client_loop(stream: UnixStream, mut to_main: Sender<ToMainLoop>) {
 
 async fn accept_loop(path: PathBuf, to_main: Sender<ToMainLoop>) {
     let _ = fs::remove_file(&path);
-    let mut listener = log_fatal!(
+    let listener = log_fatal!(
         UnixListener::bind(&path),
         "failed to create control socket {}",
         return
     );
-    while let Some(client) = listener.next().await {
-        let client = match client {
-            Ok(client) => client,
-            Err(e) => {
-                warn!("accepting client connection failed {}", e);
-                continue;
-            }
-        };
-        let to_main = to_main.clone();
-        task::spawn(client_loop(client, to_main.clone()));
+    loop {
+        if let Ok((client, _addr)) = listener.accept().await {
+            task::spawn(client_loop(client, to_main.clone()));
+        }
     }
-    info!("client accept loop shutting down");
 }
 
 pub(crate) fn run_server(cfg: &Config, to_main: Sender<ToMainLoop>) {

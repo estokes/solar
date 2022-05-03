@@ -787,7 +787,7 @@ impl Netidx {
                 m = control_rx.next() => match m {
                     None => break,
                     Some(batch) => {
-                        let (mut to_main, commands) = {
+                        let (to_main, commands) = {
                             let inner = self.0.lock();
                             (inner.to_main.clone(), inner.control.process_writes(batch))
                         };
@@ -796,7 +796,7 @@ impl Netidx {
                             let m = ToMainLoop::FromClient(cmd, reply_tx);
                             match to_main.send(m).await {
                                 Err(_) => break 'main,
-                                Ok(()) => match reply_rx.next().await {
+                                Ok(()) => match reply_rx.recv().await {
                                     None => break 'main,
                                     Some(_) => ()
                                 }
@@ -807,7 +807,7 @@ impl Netidx {
                 m = settings_rx.next() => match m {
                     None => break,
                     Some(batch) => {
-                        let (mut to_main, s) = {
+                        let (to_main, s) = {
                             let inner = self.0.lock();
                             let mut s = match inner.current.as_ref() {
                                 Some(settings) => *settings,
@@ -826,7 +826,7 @@ impl Netidx {
                             Err(_) => break,
                             Ok(()) => (),
                         }
-                        match reply_rx.next().await {
+                        match reply_rx.recv().await {
                             None => break,
                             Some(ToClient::Err(e)) =>
                                 warn!("failed to update settings {}", e),
@@ -895,7 +895,7 @@ impl Netidx {
     pub(crate) async fn flush(&self, timeout: Duration) -> Result<()> {
         let publisher = self.0.lock().publisher.clone();
         info!("publisher flush");
-        publisher.flush(Some(timeout)).await?;
+        publisher.flush(Some(timeout)).await;
         info!("publisher flushed");
         Ok(())
     }

@@ -89,7 +89,7 @@ impl Connection {
                     if tries >= 4 {
                         break Err(e);
                     } else {
-                        time::delay_for(Duration::from_millis(1000)).await;
+                        time::sleep(Duration::from_millis(1000)).await;
                         self.con = None;
                         tries += 1
                     }
@@ -103,7 +103,7 @@ impl Connection {
         let now = Instant::now();
         let elapsed = now - self.last_command;
         if elapsed < throttle {
-            time::delay_for(throttle - elapsed).await
+            time::sleep(throttle - elapsed).await
         }
         self.last_command = now;
     }
