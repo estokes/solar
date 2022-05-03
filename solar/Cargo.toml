@@ -5,8 +5,8 @@ authors = ["Eric Stokes <letaris@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-netidx = "0.8"
-netidx-core = "0.7"
+netidx = {version = "0.10", path = "../../netidx/netidx"}
+netidx-core = {version = "0.10", path = "../../netidx/netidx-core"}
 tokio = { version = "1", features = ["full"] }
 futures = "0.3"
 anyhow = "1"
