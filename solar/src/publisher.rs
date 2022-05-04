@@ -12,7 +12,7 @@ use netidx::{
 };
 use parking_lot::Mutex;
 use solar_client::{Config, FromClient, ToClient};
-use std::{sync::Arc, time::Duration};
+use std::sync::Arc;
 use tokio::{
     sync::mpsc::{self, Sender},
     task,
@@ -599,8 +599,12 @@ impl PublishedSettings {
         publisher.writes(self.exit_float_time.id(), channel.clone());
         publisher.writes(self.equalize_voltage.id(), channel.clone());
         publisher.writes(self.days_between_equalize_cycles.id(), channel.clone());
-        publisher.writes(self.equalize_time_limit_above_regulation_voltage.id(), channel.clone());
-        publisher.writes(self.equalize_time_limit_at_regulation_voltage.id(), channel.clone());
+        publisher.writes(
+            self.equalize_time_limit_above_regulation_voltage.id(),
+            channel.clone(),
+        );
+        publisher
+            .writes(self.equalize_time_limit_at_regulation_voltage.id(), channel.clone());
         publisher.writes(self.alarm_on_setting_change.id(), channel.clone());
         publisher.writes(self.reference_charge_voltage_limit.id(), channel.clone());
         publisher.writes(self.battery_charge_current_limit.id(), channel.clone());
@@ -619,7 +623,8 @@ impl PublishedSettings {
         publisher.writes(self.led_green_to_green_and_yellow_limit.id(), channel.clone());
         publisher.writes(self.led_green_and_yellow_to_yellow_limit.id(), channel.clone());
         publisher.writes(self.led_yellow_to_yellow_and_red_limit.id(), channel.clone());
-        publisher.writes(self.led_yellow_and_red_to_red_flashing_limit.id(), channel.clone());
+        publisher
+            .writes(self.led_yellow_and_red_to_red_flashing_limit.id(), channel.clone());
         publisher.writes(self.modbus_id.id(), channel.clone());
         publisher.writes(self.meterbus_id.id(), channel.clone());
         publisher.writes(self.mppt_fixed_vmp.id(), channel.clone());
@@ -801,7 +806,11 @@ impl PublishedControl {
         );
     }
 
-    fn register_writable(&self, publisher: &Publisher, channel: fmpsc::Sender<Pooled<Vec<WriteRequest>>>) {
+    fn register_writable(
+        &self,
+        publisher: &Publisher,
+        channel: fmpsc::Sender<Pooled<Vec<WriteRequest>>>,
+    ) {
         publisher.writes(self.charging.id(), channel.clone());
         publisher.writes(self.load.id(), channel.clone());
         publisher.writes(self.reset.id(), channel);
@@ -965,11 +974,5 @@ impl Netidx {
         let inner = self.0.lock();
         info!("control stats updated");
         inner.control.update(batch, st);
-    }
-
-    pub(crate) async fn flush(&self, timeout: Duration, batch: UpdateBatch) {
-        info!("publisher flush");
-        batch.commit(Some(timeout)).await;
-        info!("publisher flushed");
     }
 }

@@ -157,11 +157,8 @@ async fn run_server(config: Config) {
                 };
                 debug!("tick: flushing publisher");
                 if batch.len() > 0 {
-                    let batch = std::mem::replace(&mut batch, netidx.start_batch());
-                    match netidx.flush(batch, Duration::from_secs(10)).await {
-                        Ok(()) => (),
-                        Err(e) => warn!("netidx flush failed {}", e),
-                    }
+                    batch.commit(Some(Duration::from_secs(10))).await;
+                    batch = netidx.start_batch();
                 }
                 let timestamp = chrono::Local::now();
                 let st = Stats::V3 { timestamp, controller };
