@@ -289,9 +289,7 @@ fn main() {
                     Err(e) => panic!("failed to daemonize: {}", e),
                 }
             } else {
-                if let Some(level) = config.log_level.to_level() {
-                    simple_logger::init_with_level(level).unwrap();
-                }
+                env_logger::builder().filter_level(config.log_level).parse_default_env().build();
                 Runtime::new().unwrap().block_on(run_server(config))
             }
         }
