@@ -30,7 +30,8 @@ use solar_client::{self, archive, Config, FromClient, Stats, ToClient};
 use std::time::Duration;
 use structopt::StructOpt;
 use tokio::{
-    fs, io::{self, AsyncWriteExt},
+    fs,
+    io::{self, AsyncWriteExt},
     runtime::Runtime,
     sync::mpsc::{channel, Sender},
     time,
@@ -74,6 +75,7 @@ async fn run_server(config: Config) {
     let mut tailing: Vec<Sender<ToClient>> = Vec::new();
     let mut statsbuf = Vec::new();
     let mut initsettings = false;
+    let mut batch = netidx.start_batch();
     loop {
         let msg = select_biased! {
             _ = tick.tick().fuse() => ToMainLoop::Tick,
@@ -109,13 +111,13 @@ async fn run_server(config: Config) {
                 FromClient::WriteSettings(settings) => {
                     let r = mb.write_settings(&settings).await;
                     if r.is_ok() {
-                        netidx.update_settings(&settings);
+                        netidx.update_settings(&mut batch, &settings);
                     }
                     send_reply(r, reply).await
                 }
                 FromClient::ReadSettings => match mb.read_settings().await {
                     Ok(s) => {
-                        netidx.update_settings(&s);
+                        netidx.update_settings(&mut batch, &s);
                         reply.send(ToClient::Settings(s)).await.ok();
                     }
                     Err(e) => {
@@ -135,18 +137,18 @@ async fn run_server(config: Config) {
                         match mb.read_settings().await {
                             Ok(s) => {
                                 initsettings = true;
-                                netidx.update_settings(&s);
+                                netidx.update_settings(&mut batch, &s);
                             }
-                            Err(_) => ()
+                            Err(_) => (),
                         }
                     }
                     debug!("tick: reading stats");
                     match mb.read_stats().await {
                         Ok(s) => {
-                            netidx.update_stats(&s);
-                            netidx.update_control(&s);
+                            netidx.update_stats(&mut batch, &s);
+                            netidx.update_control(&mut batch, &s);
                             Some(s)
-                        },
+                        }
                         Err(e) => {
                             error!("reading stats failed: {}", e);
                             None
@@ -154,9 +156,12 @@ async fn run_server(config: Config) {
                     }
                 };
                 debug!("tick: flushing publisher");
-                match netidx.flush(Duration::from_secs(10)).await {
-                    Ok(()) => (),
-                    Err(e) => warn!("netidx flush failed {}", e),
+                if batch.len() > 0 {
+                    let batch = std::mem::replace(&mut batch, netidx.start_batch());
+                    match netidx.flush(batch, Duration::from_secs(10)).await {
+                        Ok(()) => (),
+                        Err(e) => warn!("netidx flush failed {}", e),
+                    }
                 }
                 let timestamp = chrono::Local::now();
                 let st = Stats::V3 { timestamp, controller };

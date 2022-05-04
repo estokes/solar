@@ -21,5 +21,5 @@ solar-client = { path = "../solar-client" }
 structopt = "0.3"
 syslog = "5"
 chrono = "0.4"
-uom = "0.31"
+uom = "0.32"
 parking_lot = "0.11"

@@ -8,8 +8,7 @@ use netidx::{
     chars::Chars,
     path::Path,
     pool::Pooled,
-    publisher::{BindCfg, Publisher, Val, Value, WriteRequest},
-    resolver::Auth,
+    publisher::{BindCfg, DesiredAuth, Publisher, UpdateBatch, Val, Value, WriteRequest},
 };
 use parking_lot::Mutex;
 use solar_client::{Config, FromClient, ToClient};
@@ -30,7 +29,6 @@ use uom::si::{
     time::{day, hour, minute, second},
 };
 
-#[derive(Clone)]
 struct PublishedStats {
     timestamp: Val,
     software_version: Val,
@@ -181,99 +179,130 @@ impl PublishedStats {
         })
     }
 
-    fn update(&self, st: &Stats) {
+    fn update(&self, batch: &mut UpdateBatch, st: &Stats) {
         use chrono::prelude::*;
         self.timestamp
-            .update_changed(Value::DateTime(DateTime::<Utc>::from(st.timestamp)));
-        self.software_version.update_changed(Value::V32(st.software_version as u32));
+            .update_changed(batch, Value::DateTime(DateTime::<Utc>::from(st.timestamp)));
+        self.software_version
+            .update_changed(batch, Value::V32(st.software_version as u32));
         self.battery_voltage_settings_multiplier
-            .update(Value::V32(st.battery_voltage_settings_multiplier as u32));
-        self.supply_3v3.update_changed(Value::F32(st.supply_3v3.get::<volt>()));
-        self.supply_12v.update_changed(Value::F32(st.supply_12v.get::<volt>()));
-        self.supply_5v.update_changed(Value::F32(st.supply_5v.get::<volt>()));
+            .update(batch, Value::V32(st.battery_voltage_settings_multiplier as u32));
+        self.supply_3v3.update_changed(batch, Value::F32(st.supply_3v3.get::<volt>()));
+        self.supply_12v.update_changed(batch, Value::F32(st.supply_12v.get::<volt>()));
+        self.supply_5v.update_changed(batch, Value::F32(st.supply_5v.get::<volt>()));
         self.gate_drive_voltage
-            .update_changed(Value::F32(st.gate_drive_voltage.get::<volt>()));
+            .update_changed(batch, Value::F32(st.gate_drive_voltage.get::<volt>()));
         self.battery_terminal_voltage
-            .update_changed(Value::F32(st.battery_terminal_voltage.get::<volt>()));
-        self.array_voltage.update_changed(Value::F32(st.array_voltage.get::<volt>()));
-        self.load_voltage.update_changed(Value::F32(st.load_voltage.get::<volt>()));
-        self.charge_current.update_changed(Value::F32(st.charge_current.get::<ampere>()));
-        self.array_current.update_changed(Value::F32(st.array_current.get::<ampere>()));
-        self.load_current.update_changed(Value::F32(st.load_current.get::<ampere>()));
+            .update_changed(batch, Value::F32(st.battery_terminal_voltage.get::<volt>()));
+        self.array_voltage
+            .update_changed(batch, Value::F32(st.array_voltage.get::<volt>()));
+        self.load_voltage
+            .update_changed(batch, Value::F32(st.load_voltage.get::<volt>()));
+        self.charge_current
+            .update_changed(batch, Value::F32(st.charge_current.get::<ampere>()));
+        self.array_current
+            .update_changed(batch, Value::F32(st.array_current.get::<ampere>()));
+        self.load_current
+            .update_changed(batch, Value::F32(st.load_current.get::<ampere>()));
         self.battery_current_net
-            .update_changed(Value::F32(st.battery_current_net.get::<ampere>()));
+            .update_changed(batch, Value::F32(st.battery_current_net.get::<ampere>()));
         self.battery_sense_voltage
-            .update_changed(Value::F32(st.battery_sense_voltage.get::<volt>()));
+            .update_changed(batch, Value::F32(st.battery_sense_voltage.get::<volt>()));
         self.meterbus_voltage
-            .update_changed(Value::F32(st.meterbus_voltage.get::<volt>()));
-        self.heatsink_temperature
-            .update_changed(Value::F32(st.heatsink_temperature.get::<degree_celsius>()));
-        self.battery_temperature
-            .update_changed(Value::F32(st.battery_temperature.get::<degree_celsius>()));
-        self.ambient_temperature
-            .update_changed(Value::F32(st.ambient_temperature.get::<degree_celsius>()));
+            .update_changed(batch, Value::F32(st.meterbus_voltage.get::<volt>()));
+        self.heatsink_temperature.update_changed(
+            batch,
+            Value::F32(st.heatsink_temperature.get::<degree_celsius>()),
+        );
+        self.battery_temperature.update_changed(
+            batch,
+            Value::F32(st.battery_temperature.get::<degree_celsius>()),
+        );
+        self.ambient_temperature.update_changed(
+            batch,
+            Value::F32(st.ambient_temperature.get::<degree_celsius>()),
+        );
         self.rts_temperature.update_changed(
+            batch,
             st.rts_temperature
                 .map(|t| Value::F32(t.get::<degree_celsius>()))
                 .unwrap_or(Value::Null),
         );
-        self.u_inductor_temperature.update_changed(Value::F32(
-            st.u_inductor_temperature.get::<degree_celsius>(),
-        ));
-        self.v_inductor_temperature.update_changed(Value::F32(
-            st.v_inductor_temperature.get::<degree_celsius>(),
-        ));
-        self.w_inductor_temperature.update_changed(Value::F32(
-            st.w_inductor_temperature.get::<degree_celsius>(),
-        ));
-        self.charge_state
-            .update_changed(Value::String(Chars::from(format!("{:?}", st.charge_state))));
-        self.array_faults.update_changed(Value::V32(st.array_faults.bits() as u32));
+        self.u_inductor_temperature.update_changed(
+            batch,
+            Value::F32(st.u_inductor_temperature.get::<degree_celsius>()),
+        );
+        self.v_inductor_temperature.update_changed(
+            batch,
+            Value::F32(st.v_inductor_temperature.get::<degree_celsius>()),
+        );
+        self.w_inductor_temperature.update_changed(
+            batch,
+            Value::F32(st.w_inductor_temperature.get::<degree_celsius>()),
+        );
+        self.charge_state.update_changed(
+            batch,
+            Value::String(Chars::from(format!("{:?}", st.charge_state))),
+        );
+        self.array_faults
+            .update_changed(batch, Value::V32(st.array_faults.bits() as u32));
         self.battery_voltage_slow
-            .update_changed(Value::F32(st.battery_voltage_slow.get::<volt>()));
-        self.target_voltage.update_changed(Value::F32(st.target_voltage.get::<volt>()));
-        self.ah_charge_resettable
-            .update_changed(Value::F32(st.ah_charge_resettable.get::<ampere_hour>()));
+            .update_changed(batch, Value::F32(st.battery_voltage_slow.get::<volt>()));
+        self.target_voltage
+            .update_changed(batch, Value::F32(st.target_voltage.get::<volt>()));
+        self.ah_charge_resettable.update_changed(
+            batch,
+            Value::F32(st.ah_charge_resettable.get::<ampere_hour>()),
+        );
         self.ah_charge_total
-            .update_changed(Value::F32(st.ah_charge_total.get::<ampere_hour>()));
-        self.kwh_charge_resettable
-            .update_changed(Value::F32(st.kwh_charge_resettable.get::<kilowatt_hour>()));
-        self.kwh_charge_total
-            .update_changed(Value::F32(st.kwh_charge_total.get::<kilowatt_hour>()));
-        self.load_state
-            .update_changed(Value::String(Chars::from(format!("{:?}", st.load_state))));
-        self.load_faults.update_changed(Value::V32(st.load_faults.bits() as u32));
-        self.lvd_setpoint.update_changed(Value::F32(st.lvd_setpoint.get::<volt>()));
-        self.ah_load_resettable
-            .update_changed(Value::F32(st.ah_load_resettable.get::<ampere_hour>()));
+            .update_changed(batch, Value::F32(st.ah_charge_total.get::<ampere_hour>()));
+        self.kwh_charge_resettable.update_changed(
+            batch,
+            Value::F32(st.kwh_charge_resettable.get::<kilowatt_hour>()),
+        );
+        self.kwh_charge_total.update_changed(
+            batch,
+            Value::F32(st.kwh_charge_total.get::<kilowatt_hour>()),
+        );
+        self.load_state.update_changed(
+            batch,
+            Value::String(Chars::from(format!("{:?}", st.load_state))),
+        );
+        self.load_faults.update_changed(batch, Value::V32(st.load_faults.bits() as u32));
+        self.lvd_setpoint
+            .update_changed(batch, Value::F32(st.lvd_setpoint.get::<volt>()));
+        self.ah_load_resettable.update_changed(
+            batch,
+            Value::F32(st.ah_load_resettable.get::<ampere_hour>()),
+        );
         self.ah_load_total
-            .update_changed(Value::F32(st.ah_load_total.get::<ampere_hour>()));
-        self.hourmeter.update_changed(Value::F32(st.hourmeter.get::<hour>()));
-        self.alarms.update_changed(Value::U32(st.alarms.bits()));
-        self.array_power.update_changed(Value::F32(st.array_power.get::<watt>()));
-        self.array_vmp.update_changed(Value::F32(st.array_vmp.get::<volt>()));
+            .update_changed(batch, Value::F32(st.ah_load_total.get::<ampere_hour>()));
+        self.hourmeter.update_changed(batch, Value::F32(st.hourmeter.get::<hour>()));
+        self.alarms.update_changed(batch, Value::U32(st.alarms.bits()));
+        self.array_power.update_changed(batch, Value::F32(st.array_power.get::<watt>()));
+        self.array_vmp.update_changed(batch, Value::F32(st.array_vmp.get::<volt>()));
         self.array_max_power_sweep
-            .update_changed(Value::F32(st.array_max_power_sweep.get::<watt>()));
-        self.array_voc.update_changed(Value::F32(st.array_voc.get::<volt>()));
+            .update_changed(batch, Value::F32(st.array_max_power_sweep.get::<watt>()));
+        self.array_voc.update_changed(batch, Value::F32(st.array_voc.get::<volt>()));
         self.battery_v_min_daily
-            .update_changed(Value::F32(st.battery_v_min_daily.get::<volt>()));
+            .update_changed(batch, Value::F32(st.battery_v_min_daily.get::<volt>()));
         self.battery_v_max_daily
-            .update_changed(Value::F32(st.battery_v_max_daily.get::<volt>()));
+            .update_changed(batch, Value::F32(st.battery_v_max_daily.get::<volt>()));
         self.ah_charge_daily
-            .update_changed(Value::F32(st.ah_charge_daily.get::<ampere_hour>()));
+            .update_changed(batch, Value::F32(st.ah_charge_daily.get::<ampere_hour>()));
         self.ah_load_daily
-            .update_changed(Value::F32(st.ah_load_daily.get::<ampere_hour>()));
+            .update_changed(batch, Value::F32(st.ah_load_daily.get::<ampere_hour>()));
         self.array_faults_daily
-            .update_changed(Value::V32(st.array_faults_daily.bits() as u32));
+            .update_changed(batch, Value::V32(st.array_faults_daily.bits() as u32));
         self.load_faults_daily
-            .update_changed(Value::V32(st.load_faults_daily.bits() as u32));
-        self.alarms_daily.update_changed(Value::U32(st.alarms_daily.bits()));
+            .update_changed(batch, Value::V32(st.load_faults_daily.bits() as u32));
+        self.alarms_daily.update_changed(batch, Value::U32(st.alarms_daily.bits()));
         self.array_voltage_max_daily
-            .update_changed(Value::F32(st.array_voltage_max_daily.get::<volt>()));
+            .update_changed(batch, Value::F32(st.array_voltage_max_daily.get::<volt>()));
         self.array_voltage_fixed
-            .update_changed(Value::F32(st.array_voltage_fixed.get::<volt>()));
+            .update_changed(batch, Value::F32(st.array_voltage_fixed.get::<volt>()));
         self.array_voc_percent_fixed
-            .update_changed(Value::F32(st.array_voc_percent_fixed));
+            .update_changed(batch, Value::F32(st.array_voc_percent_fixed));
     }
 }
 
@@ -310,7 +339,6 @@ macro_rules! bool {
     };
 }
 
-#[derive(Clone)]
 struct PublishedSettings {
     regulation_voltage: Val,
     float_voltage: Val,
@@ -441,125 +469,162 @@ impl PublishedSettings {
         })
     }
 
-    fn update(&self, set: &Settings) {
+    fn update(&self, batch: &mut UpdateBatch, set: &Settings) {
         self.regulation_voltage
-            .update_changed(Value::F32(set.regulation_voltage.get::<volt>()));
-        self.float_voltage.update_changed(Value::F32(set.float_voltage.get::<volt>()));
+            .update_changed(batch, Value::F32(set.regulation_voltage.get::<volt>()));
+        self.float_voltage
+            .update_changed(batch, Value::F32(set.float_voltage.get::<volt>()));
         self.time_before_float
-            .update_changed(Value::F32(set.time_before_float.get::<second>()));
-        self.time_before_float_low_battery.update_changed(Value::F32(
-            set.time_before_float_low_battery.get::<second>(),
-        ));
-        self.float_low_battery_voltage_trigger.update_changed(Value::F32(
-            set.float_low_battery_voltage_trigger.get::<volt>(),
-        ));
+            .update_changed(batch, Value::F32(set.time_before_float.get::<second>()));
+        self.time_before_float_low_battery.update_changed(
+            batch,
+            Value::F32(set.time_before_float_low_battery.get::<second>()),
+        );
+        self.float_low_battery_voltage_trigger.update_changed(
+            batch,
+            Value::F32(set.float_low_battery_voltage_trigger.get::<volt>()),
+        );
         self.float_cancel_voltage
-            .update_changed(Value::F32(set.float_cancel_voltage.get::<volt>()));
+            .update_changed(batch, Value::F32(set.float_cancel_voltage.get::<volt>()));
         self.exit_float_time
-            .update_changed(Value::F32(set.exit_float_time.get::<minute>()));
+            .update_changed(batch, Value::F32(set.exit_float_time.get::<minute>()));
         self.equalize_voltage
-            .update_changed(Value::F32(set.equalize_voltage.get::<volt>()));
-        self.days_between_equalize_cycles
-            .update_changed(Value::F32(set.days_between_equalize_cycles.get::<day>()));
-        self.equalize_time_limit_above_regulation_voltage.update_changed(Value::F32(
-            set.equalize_time_limit_above_regulation_voltage.get::<minute>(),
-        ));
-        self.equalize_time_limit_at_regulation_voltage.update_changed(Value::F32(
-            set.equalize_time_limit_at_regulation_voltage.get::<minute>(),
-        ));
-        self.alarm_on_setting_change.update_changed(match set.alarm_on_setting_change {
-            true => Value::True,
-            false => Value::False,
-        });
-        self.reference_charge_voltage_limit
-            .update_changed(Value::F32(set.reference_charge_voltage_limit.get::<volt>()));
-        self.battery_charge_current_limit
-            .update_changed(Value::F32(set.battery_charge_current_limit.get::<ampere>()));
-        self.temperature_compensation_coefficent.update_changed(Value::F32(
-            set.temperature_compensation_coefficent.get::<volt>(),
-        ));
+            .update_changed(batch, Value::F32(set.equalize_voltage.get::<volt>()));
+        self.days_between_equalize_cycles.update_changed(
+            batch,
+            Value::F32(set.days_between_equalize_cycles.get::<day>()),
+        );
+        self.equalize_time_limit_above_regulation_voltage.update_changed(
+            batch,
+            Value::F32(set.equalize_time_limit_above_regulation_voltage.get::<minute>()),
+        );
+        self.equalize_time_limit_at_regulation_voltage.update_changed(
+            batch,
+            Value::F32(set.equalize_time_limit_at_regulation_voltage.get::<minute>()),
+        );
+        self.alarm_on_setting_change.update_changed(
+            batch,
+            match set.alarm_on_setting_change {
+                true => Value::True,
+                false => Value::False,
+            },
+        );
+        self.reference_charge_voltage_limit.update_changed(
+            batch,
+            Value::F32(set.reference_charge_voltage_limit.get::<volt>()),
+        );
+        self.battery_charge_current_limit.update_changed(
+            batch,
+            Value::F32(set.battery_charge_current_limit.get::<ampere>()),
+        );
+        self.temperature_compensation_coefficent.update_changed(
+            batch,
+            Value::F32(set.temperature_compensation_coefficent.get::<volt>()),
+        );
         self.high_voltage_disconnect
-            .update_changed(Value::F32(set.high_voltage_disconnect.get::<volt>()));
+            .update_changed(batch, Value::F32(set.high_voltage_disconnect.get::<volt>()));
         self.high_voltage_reconnect
-            .update_changed(Value::F32(set.high_voltage_reconnect.get::<volt>()));
-        self.maximum_charge_voltage_reference.update_changed(Value::F32(
-            set.maximum_charge_voltage_reference.get::<volt>(),
-        ));
-        self.max_battery_temp_compensation_limit.update_changed(Value::F32(
-            set.max_battery_temp_compensation_limit.get::<degree_celsius>(),
-        ));
-        self.min_battery_temp_compensation_limit.update_changed(Value::F32(
-            set.min_battery_temp_compensation_limit.get::<degree_celsius>(),
-        ));
-        self.load_low_voltage_disconnect
-            .update_changed(Value::F32(set.load_low_voltage_disconnect.get::<volt>()));
-        self.load_low_voltage_reconnect
-            .update_changed(Value::F32(set.load_low_voltage_reconnect.get::<volt>()));
-        self.load_high_voltage_disconnect
-            .update_changed(Value::F32(set.load_high_voltage_disconnect.get::<volt>()));
-        self.load_high_voltage_reconnect
-            .update_changed(Value::F32(set.load_high_voltage_reconnect.get::<volt>()));
-        self.lvd_load_current_compensation
-            .update_changed(Value::F32(set.lvd_load_current_compensation.get::<ohm>()));
+            .update_changed(batch, Value::F32(set.high_voltage_reconnect.get::<volt>()));
+        self.maximum_charge_voltage_reference.update_changed(
+            batch,
+            Value::F32(set.maximum_charge_voltage_reference.get::<volt>()),
+        );
+        self.max_battery_temp_compensation_limit.update_changed(
+            batch,
+            Value::F32(set.max_battery_temp_compensation_limit.get::<degree_celsius>()),
+        );
+        self.min_battery_temp_compensation_limit.update_changed(
+            batch,
+            Value::F32(set.min_battery_temp_compensation_limit.get::<degree_celsius>()),
+        );
+        self.load_low_voltage_disconnect.update_changed(
+            batch,
+            Value::F32(set.load_low_voltage_disconnect.get::<volt>()),
+        );
+        self.load_low_voltage_reconnect.update_changed(
+            batch,
+            Value::F32(set.load_low_voltage_reconnect.get::<volt>()),
+        );
+        self.load_high_voltage_disconnect.update_changed(
+            batch,
+            Value::F32(set.load_high_voltage_disconnect.get::<volt>()),
+        );
+        self.load_high_voltage_reconnect.update_changed(
+            batch,
+            Value::F32(set.load_high_voltage_reconnect.get::<volt>()),
+        );
+        self.lvd_load_current_compensation.update_changed(
+            batch,
+            Value::F32(set.lvd_load_current_compensation.get::<ohm>()),
+        );
         self.lvd_warning_timeout
-            .update_changed(Value::F32(set.lvd_warning_timeout.get::<second>()));
-        self.led_green_to_green_and_yellow_limit.update_changed(Value::F32(
-            set.led_green_to_green_and_yellow_limit.get::<volt>(),
-        ));
-        self.led_green_and_yellow_to_yellow_limit.update_changed(Value::F32(
-            set.led_green_and_yellow_to_yellow_limit.get::<volt>(),
-        ));
-        self.led_yellow_to_yellow_and_red_limit.update_changed(Value::F32(
-            set.led_yellow_to_yellow_and_red_limit.get::<volt>(),
-        ));
-        self.led_yellow_and_red_to_red_flashing_limit.update_changed(Value::F32(
-            set.led_yellow_and_red_to_red_flashing_limit.get::<volt>(),
-        ));
-        self.modbus_id.update_changed(Value::U32(set.modbus_id as u32));
-        self.meterbus_id.update_changed(Value::U32(set.meterbus_id as u32));
-        self.mppt_fixed_vmp.update_changed(Value::F32(set.mppt_fixed_vmp.get::<volt>()));
+            .update_changed(batch, Value::F32(set.lvd_warning_timeout.get::<second>()));
+        self.led_green_to_green_and_yellow_limit.update_changed(
+            batch,
+            Value::F32(set.led_green_to_green_and_yellow_limit.get::<volt>()),
+        );
+        self.led_green_and_yellow_to_yellow_limit.update_changed(
+            batch,
+            Value::F32(set.led_green_and_yellow_to_yellow_limit.get::<volt>()),
+        );
+        self.led_yellow_to_yellow_and_red_limit.update_changed(
+            batch,
+            Value::F32(set.led_yellow_to_yellow_and_red_limit.get::<volt>()),
+        );
+        self.led_yellow_and_red_to_red_flashing_limit.update_changed(
+            batch,
+            Value::F32(set.led_yellow_and_red_to_red_flashing_limit.get::<volt>()),
+        );
+        self.modbus_id.update_changed(batch, Value::U32(set.modbus_id as u32));
+        self.meterbus_id.update_changed(batch, Value::U32(set.meterbus_id as u32));
+        self.mppt_fixed_vmp
+            .update_changed(batch, Value::F32(set.mppt_fixed_vmp.get::<volt>()));
         self.mppt_fixed_vmp_percent
-            .update_changed(Value::F32(set.mppt_fixed_vmp_percent));
+            .update_changed(batch, Value::F32(set.mppt_fixed_vmp_percent));
         self.charge_current_limit
-            .update_changed(Value::F32(set.charge_current_limit.get::<ampere>()));
+            .update_changed(batch, Value::F32(set.charge_current_limit.get::<ampere>()));
     }
 
-    fn register_writable(&self, channel: fmpsc::Sender<Pooled<Vec<WriteRequest>>>) {
-        self.regulation_voltage.writes(channel.clone());
-        self.float_voltage.writes(channel.clone());
-        self.time_before_float.writes(channel.clone());
-        self.time_before_float_low_battery.writes(channel.clone());
-        self.float_low_battery_voltage_trigger.writes(channel.clone());
-        self.float_cancel_voltage.writes(channel.clone());
-        self.exit_float_time.writes(channel.clone());
-        self.equalize_voltage.writes(channel.clone());
-        self.days_between_equalize_cycles.writes(channel.clone());
-        self.equalize_time_limit_above_regulation_voltage.writes(channel.clone());
-        self.equalize_time_limit_at_regulation_voltage.writes(channel.clone());
-        self.alarm_on_setting_change.writes(channel.clone());
-        self.reference_charge_voltage_limit.writes(channel.clone());
-        self.battery_charge_current_limit.writes(channel.clone());
-        self.temperature_compensation_coefficent.writes(channel.clone());
-        self.high_voltage_disconnect.writes(channel.clone());
-        self.high_voltage_reconnect.writes(channel.clone());
-        self.maximum_charge_voltage_reference.writes(channel.clone());
-        self.max_battery_temp_compensation_limit.writes(channel.clone());
-        self.min_battery_temp_compensation_limit.writes(channel.clone());
-        self.load_low_voltage_disconnect.writes(channel.clone());
-        self.load_low_voltage_reconnect.writes(channel.clone());
-        self.load_high_voltage_disconnect.writes(channel.clone());
-        self.load_high_voltage_reconnect.writes(channel.clone());
-        self.lvd_load_current_compensation.writes(channel.clone());
-        self.lvd_warning_timeout.writes(channel.clone());
-        self.led_green_to_green_and_yellow_limit.writes(channel.clone());
-        self.led_green_and_yellow_to_yellow_limit.writes(channel.clone());
-        self.led_yellow_to_yellow_and_red_limit.writes(channel.clone());
-        self.led_yellow_and_red_to_red_flashing_limit.writes(channel.clone());
-        self.modbus_id.writes(channel.clone());
-        self.meterbus_id.writes(channel.clone());
-        self.mppt_fixed_vmp.writes(channel.clone());
-        self.mppt_fixed_vmp_percent.writes(channel.clone());
-        self.charge_current_limit.writes(channel);
+    fn register_writable(
+        &self,
+        publisher: &Publisher,
+        channel: fmpsc::Sender<Pooled<Vec<WriteRequest>>>,
+    ) {
+        publisher.writes(self.regulation_voltage.id(), channel.clone());
+        publisher.writes(self.float_voltage.id(), channel.clone());
+        publisher.writes(self.time_before_float.id(), channel.clone());
+        publisher.writes(self.time_before_float_low_battery.id(), channel.clone());
+        publisher.writes(self.float_low_battery_voltage_trigger.id(), channel.clone());
+        publisher.writes(self.float_cancel_voltage.id(), channel.clone());
+        publisher.writes(self.exit_float_time.id(), channel.clone());
+        publisher.writes(self.equalize_voltage.id(), channel.clone());
+        publisher.writes(self.days_between_equalize_cycles.id(), channel.clone());
+        publisher.writes(self.equalize_time_limit_above_regulation_voltage.id(), channel.clone());
+        publisher.writes(self.equalize_time_limit_at_regulation_voltage.id(), channel.clone());
+        publisher.writes(self.alarm_on_setting_change.id(), channel.clone());
+        publisher.writes(self.reference_charge_voltage_limit.id(), channel.clone());
+        publisher.writes(self.battery_charge_current_limit.id(), channel.clone());
+        publisher.writes(self.temperature_compensation_coefficent.id(), channel.clone());
+        publisher.writes(self.high_voltage_disconnect.id(), channel.clone());
+        publisher.writes(self.high_voltage_reconnect.id(), channel.clone());
+        publisher.writes(self.maximum_charge_voltage_reference.id(), channel.clone());
+        publisher.writes(self.max_battery_temp_compensation_limit.id(), channel.clone());
+        publisher.writes(self.min_battery_temp_compensation_limit.id(), channel.clone());
+        publisher.writes(self.load_low_voltage_disconnect.id(), channel.clone());
+        publisher.writes(self.load_low_voltage_reconnect.id(), channel.clone());
+        publisher.writes(self.load_high_voltage_disconnect.id(), channel.clone());
+        publisher.writes(self.load_high_voltage_reconnect.id(), channel.clone());
+        publisher.writes(self.lvd_load_current_compensation.id(), channel.clone());
+        publisher.writes(self.lvd_warning_timeout.id(), channel.clone());
+        publisher.writes(self.led_green_to_green_and_yellow_limit.id(), channel.clone());
+        publisher.writes(self.led_green_and_yellow_to_yellow_limit.id(), channel.clone());
+        publisher.writes(self.led_yellow_to_yellow_and_red_limit.id(), channel.clone());
+        publisher.writes(self.led_yellow_and_red_to_red_flashing_limit.id(), channel.clone());
+        publisher.writes(self.modbus_id.id(), channel.clone());
+        publisher.writes(self.meterbus_id.id(), channel.clone());
+        publisher.writes(self.mppt_fixed_vmp.id(), channel.clone());
+        publisher.writes(self.mppt_fixed_vmp_percent.id(), channel.clone());
+        publisher.writes(self.charge_current_limit.id(), channel);
     }
 
     fn process_writes(&self, mut batch: Pooled<Vec<WriteRequest>>, p: &mut Settings) {
@@ -704,36 +769,42 @@ impl PublishedControl {
         })
     }
 
-    fn update(&self, st: &Stats) {
-        self.charging.update_changed(match st.charge_state {
-            ChargeState::Disconnect | ChargeState::Fault => Value::False,
-            ChargeState::UnknownState(_)
-            | ChargeState::Absorption
-            | ChargeState::BulkMPPT
-            | ChargeState::Equalize
-            | ChargeState::Fixed
-            | ChargeState::Float
-            | ChargeState::Night
-            | ChargeState::NightCheck
-            | ChargeState::Start
-            | ChargeState::Slave => Value::True,
-        });
-        self.load.update_changed(match st.load_state {
-            LoadState::Disconnect | LoadState::Fault | LoadState::LVD => Value::False,
-            LoadState::LVDWarning
-            | LoadState::Normal
-            | LoadState::NormalOff
-            | LoadState::NotUsed
-            | LoadState::Override
-            | LoadState::Start
-            | LoadState::Unknown(_) => Value::True,
-        });
+    fn update(&self, batch: &mut UpdateBatch, st: &Stats) {
+        self.charging.update_changed(
+            batch,
+            match st.charge_state {
+                ChargeState::Disconnect | ChargeState::Fault => Value::False,
+                ChargeState::UnknownState(_)
+                | ChargeState::Absorption
+                | ChargeState::BulkMPPT
+                | ChargeState::Equalize
+                | ChargeState::Fixed
+                | ChargeState::Float
+                | ChargeState::Night
+                | ChargeState::NightCheck
+                | ChargeState::Start
+                | ChargeState::Slave => Value::True,
+            },
+        );
+        self.load.update_changed(
+            batch,
+            match st.load_state {
+                LoadState::Disconnect | LoadState::Fault | LoadState::LVD => Value::False,
+                LoadState::LVDWarning
+                | LoadState::Normal
+                | LoadState::NormalOff
+                | LoadState::NotUsed
+                | LoadState::Override
+                | LoadState::Start
+                | LoadState::Unknown(_) => Value::True,
+            },
+        );
     }
 
-    fn register_writable(&self, channel: fmpsc::Sender<Pooled<Vec<WriteRequest>>>) {
-        self.charging.writes(channel.clone());
-        self.load.writes(channel.clone());
-        self.reset.writes(channel.clone());
+    fn register_writable(&self, publisher: &Publisher, channel: fmpsc::Sender<Pooled<Vec<WriteRequest>>>) {
+        publisher.writes(self.charging.id(), channel.clone());
+        publisher.writes(self.load.id(), channel.clone());
+        publisher.writes(self.reset.id(), channel);
     }
 
     fn process_writes(&self, mut batch: Pooled<Vec<WriteRequest>>) -> Vec<FromClient> {
@@ -777,8 +848,8 @@ impl Netidx {
         let (control_tx, control_rx) = fmpsc::channel(10);
         {
             let inner = self.0.lock();
-            inner.settings.register_writable(settings_tx);
-            inner.control.register_writable(control_tx);
+            inner.settings.register_writable(&inner.publisher, settings_tx);
+            inner.control.register_writable(&inner.publisher, control_tx);
         }
         let mut settings_rx = settings_rx.fuse();
         let mut control_rx = control_rx.fuse();
@@ -852,8 +923,8 @@ impl Netidx {
         let auth = cfg
             .netidx_spn
             .clone()
-            .map(|s| Auth::Krb5 { spn: Some(s), upn: None })
-            .unwrap_or(Auth::Anonymous);
+            .map(|spn| DesiredAuth::Krb5 { spn: Some(spn), upn: None })
+            .unwrap_or(DesiredAuth::Anonymous);
         info!("create publisher");
         let publisher = Publisher::new(resolver, auth, bindcfg).await?;
         info!("created publisher");
@@ -873,30 +944,32 @@ impl Netidx {
         Ok(t)
     }
 
-    pub(crate) fn update_stats(&self, st: &Stats) {
-        let inner = self.0.lock();
-        info!("stats updated");
-        inner.stats.update(st);
+    pub(crate) fn start_batch(&self) -> UpdateBatch {
+        self.0.lock().publisher.start_batch()
     }
 
-    pub(crate) fn update_settings(&self, set: &Settings) {
+    pub(crate) fn update_stats(&self, batch: &mut UpdateBatch, st: &Stats) {
+        let inner = self.0.lock();
+        info!("stats updated");
+        inner.stats.update(batch, st);
+    }
+
+    pub(crate) fn update_settings(&self, batch: &mut UpdateBatch, set: &Settings) {
         let mut inner = self.0.lock();
         info!("settings updated");
         inner.current = Some(*set);
-        inner.settings.update(set);
+        inner.settings.update(batch, set);
     }
 
-    pub(crate) fn update_control(&self, st: &Stats) {
+    pub(crate) fn update_control(&self, batch: &mut UpdateBatch, st: &Stats) {
         let inner = self.0.lock();
         info!("control stats updated");
-        inner.control.update(st);
+        inner.control.update(batch, st);
     }
 
-    pub(crate) async fn flush(&self, timeout: Duration) -> Result<()> {
-        let publisher = self.0.lock().publisher.clone();
+    pub(crate) async fn flush(&self, timeout: Duration, batch: UpdateBatch) {
         info!("publisher flush");
-        publisher.flush(Some(timeout)).await;
+        batch.commit(Some(timeout)).await;
         info!("publisher flushed");
-        Ok(())
     }
 }
