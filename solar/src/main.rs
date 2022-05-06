@@ -289,7 +289,10 @@ fn main() {
                     Err(e) => panic!("failed to daemonize: {}", e),
                 }
             } else {
-                env_logger::builder().filter_level(config.log_level).parse_default_env().build();
+                env_logger::builder()
+                    .filter_level(config.log_level)
+                    .parse_default_env()
+                    .init();
                 Runtime::new().unwrap().block_on(run_server(config))
             }
         }
